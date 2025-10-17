@@ -5,6 +5,7 @@ using UnityEngine;
 using UnityEditor;
 using System.Collections.Generic;
 using System.Text;
+using System.Linq;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Bson;
 using Newtonsoft.Json.Linq;
@@ -517,7 +518,7 @@ public class SDFShape : MonoBehaviour
 
 #if UNITY_EDITOR
     // Struct to store transform data per frame
-    private struct TransformData
+    public struct TransformData
     {
         public Vector3 position;
         public Quaternion rotation;
@@ -528,18 +529,21 @@ public class SDFShape : MonoBehaviour
     private static Dictionary<int, Dictionary<SDFShape, TransformData>> frameTransforms = new Dictionary<int, Dictionary<SDFShape, TransformData>>();
 
     [InitializeOnLoad]
-    private static void Initialize()
+    private static class SDFShapeInitializer
     {
-        EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
-    }
-
-    private static void OnPlayModeStateChanged(PlayModeStateChange state)
-    {
-        if (state == PlayModeStateChange.ExitingPlayMode)
+        static SDFShapeInitializer()
         {
-            // Save all accumulated frames into a single BSON
-            ExportAllFramesToBSON(frameTransforms);
-            frameTransforms.Clear();
+            EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
+        }
+
+        private static void OnPlayModeStateChanged(PlayModeStateChange state)
+        {
+            if (state == PlayModeStateChange.ExitingPlayMode)
+            {
+                // Save all accumulated frames into a single BSON
+                ExportAllFramesToBSON(frameTransforms);
+                frameTransforms.Clear();
+            }
         }
     }
 
@@ -547,7 +551,8 @@ public class SDFShape : MonoBehaviour
     private static void ExportAllSDFShapesToBSON()
     {
         var shapes = FindObjectsOfType<SDFShape>();
-        ExportAllSDFShapesToBSON(-1, shapes, null);
+        var allFrames = new Dictionary<int, Dictionary<SDFShape, TransformData>>();
+        ExportAllFramesToBSON(allFrames);
     }
 
     public static void ExportAllFramesToBSON(Dictionary<int, Dictionary<SDFShape, TransformData>> allFrames)
@@ -636,7 +641,7 @@ public class SDFShape : MonoBehaviour
                 var root = new JObject();
                 var framesArray = new JArray();
 
-                foreach (var kvp in allFrames.OrderBy(k => k.Key)) // Order by frame number
+                foreach (var kvp in allFrames.OrderBy((KeyValuePair<int, Dictionary<SDFShape, TransformData>> k) => k.Key)) // Order by frame number
                 {
                     int frameNumber = kvp.Key;
                     var frameShapes = kvp.Value;
