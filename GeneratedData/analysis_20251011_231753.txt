@@ -1,0 +1,47 @@
+=== COMPREHENSIVE EMU FILE ANALYSIS ===
+📁 Generated: 2025-10-11 23:17:53
+🎮 Unity Version: 2022.3.22f1
+
+📊 GEOMETRY STATISTICS:
+  • Vertices: 14,673
+  • Faces: 5,653
+  • Average vertices per face: 2.60
+
+🌳 BSP TREE STATISTICS:
+  • Total leaf nodes: 10
+  • Maximum depth reached: 12
+  • Average faces per leaf: 565.30
+
+👁️ PVS STATISTICS:
+  • Leaves with PVS data: 10
+  • Total PVS data size: 20 bytes (0.0 KB)
+  • Average PVS size per leaf: 2.0 bytes
+  • Compression ratio: 166.7%
+
+⚙️ UNITY API FEATURES USED:
+  • RenderTexture System: ✅
+  • GeometryUtility: ✅
+  • Occlusion Culling: ✅
+  • Color ID Encoding: ✅
+  • Async Computation: ✅
+
+⚡ PERFORMANCE METRICS:
+  • Total computation time: 232ms
+  • PVS computation rate: 43.1 leaves/second
+  • Peak memory usage: 33MB
+
+🔧 CONFIGURATION:
+  • Max BSP depth: 12
+  • Min faces per leaf: 8
+  • Max visibility distance: 100m
+  • Render texture size: 64x64
+  • PVS batch size: 10
+
+✨ UNITY ENHANCEMENTS:
+  • Hardware-accelerated PVS computation
+  • Multi-directional visibility sampling
+  • Frustum culling optimization
+  • Memory-efficient data structures
+  • Real-time progress monitoring
+  • Async computation for large scenes
+=====================================
