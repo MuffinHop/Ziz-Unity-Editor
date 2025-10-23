@@ -184,6 +184,65 @@ namespace Rat.CommandLine
             return (byte)bits;
         }
 
+        public static CompressedAnimation CompressFrames(List<UnityEngine.Vector3[]> allFramesVertices, ushort[] allIndices, UnityEngine.Vector2[] allUVs, UnityEngine.Color[] allColors)
+        {
+            if (allFramesVertices == null || allFramesVertices.Count == 0)
+            {
+                throw new ArgumentException("No vertex data provided.");
+            }
+
+            uint numFrames = (uint)allFramesVertices.Count;
+            uint numVertices = (uint)allFramesVertices[0].Length;
+            uint numIndices = (uint)allIndices.Length;
+
+            // 1. Calculate bounds
+            float minX = float.MaxValue, minY = float.MaxValue, minZ = float.MaxValue;
+            float maxX = float.MinValue, maxY = float.MinValue, maxZ = float.MinValue;
+
+            foreach (var frame in allFramesVertices)
+            {
+                foreach (var v in frame)
+                {
+                    if (v.x < minX) minX = v.x;
+                    if (v.x > maxX) maxX = v.x;
+                    if (v.y < minY) minY = v.y;
+                    if (v.y > maxY) maxY = v.y;
+                    if (v.z < minZ) minZ = v.z;
+                    if (v.z > maxZ) maxZ = v.z;
+                }
+            }
+
+            float rangeX = maxX - minX;
+            float rangeY = maxY - minY;
+            float rangeZ = maxZ - minZ;
+            if (rangeX == 0) rangeX = 1;
+            if (rangeY == 0) rangeY = 1;
+            if (rangeZ == 0) rangeZ = 1;
+
+            // 2. Normalize vertices to VertexU8
+            var frames = new VertexU8[numFrames][];
+            for (int f = 0; f < numFrames; f++)
+            {
+                frames[f] = new VertexU8[numVertices];
+                for (int v = 0; v < numVertices; v++)
+                {
+                    frames[f][v].x = (byte)UnityEngine.Mathf.Clamp(((allFramesVertices[f][v].x - minX) / rangeX) * 255.0f, 0, 255);
+                    frames[f][v].y = (byte)UnityEngine.Mathf.Clamp(((allFramesVertices[f][v].y - minY) / rangeY) * 255.0f, 0, 255);
+                    frames[f][v].z = (byte)UnityEngine.Mathf.Clamp(((allFramesVertices[f][v].z - minZ) / rangeZ) * 255.0f, 0, 255);
+                }
+            }
+
+            // 3. Convert UVs and Colors
+            var uvs = new VertexUV[numVertices];
+            for(int i=0; i<numVertices; i++) uvs[i] = new VertexUV { u = allUVs[i].x, v = allUVs[i].y };
+
+            var colors = new VertexColor[numVertices];
+            for(int i=0; i<numVertices; i++) colors[i] = new VertexColor { r = allColors[i].r, g = allColors[i].g, b = allColors[i].b, a = allColors[i].a };
+
+            // 4. Call original CompressAnimation method
+            return CompressAnimation(frames, uvs, colors, allIndices, numVertices, numIndices, numFrames, minX, minY, minZ, maxX, maxY, maxZ);
+        }
+
         public static CompressedAnimation CompressAnimation(VertexU8[][] frames, VertexUV[] uvs, VertexColor[] colors, ushort[] indices, uint numVertices, uint numIndices, uint numFrames, float minX, float minY, float minZ, float maxX, float maxY, float maxZ)
         {
             var anim = new CompressedAnimation

@@ -188,7 +188,7 @@ public class SDFShape : MonoBehaviour
     /// Important: no timestamps are used — filenames are fully deterministic based on parameters.
     /// This enables reusing previously-generated PNGs when recyclePreviousShapes is enabled.
     /// </summary>
-    private string BuildOutputFilename(int width, int height)
+    public string BuildOutputFilename(int width, int height)
     {
         string projectRoot = Application.dataPath.Replace("/Assets", "");
         string generatedDataPath = System.IO.Path.Combine(projectRoot, "GeneratedData");
@@ -556,499 +556,9 @@ public class SDFShape : MonoBehaviour
         {
             if (state == PlayModeStateChange.ExitingPlayMode)
             {
-                // Save all accumulated frames into a single BSON
-                ExportAllFramesToBSON(frameTransforms);
                 frameTransforms.Clear();
             }
         }
-    }
-
-    [UnityEditor.MenuItem("Tools/Export SDF Shapes BSON")]
-    private static void ExportAllSDFShapesToBSON()
-    {
-        var shapes = FindObjectsOfType<SDFShape>();
-        var allFrames = new Dictionary<int, Dictionary<SDFShape, TransformData>>();
-        ExportAllFramesToBSON(allFrames);
-    }
-
-    // Shape definition: unique combination of type and parameters
-    public struct ShapeDefinition
-    {
-        public SDFShapeType shapeType;
-        public Color color;
-        public float radius;
-        public float roundness;
-        public float smooth;
-        public float thickness;
-        public float headSize;
-        public float shaftThickness;
-        public float starInner;
-        public float starOuter;
-        public float starPoints;
-        public int textureIndex; // index into textures array
-
-        public override bool Equals(object obj)
-        {
-            if (!(obj is ShapeDefinition)) return false;
-            var other = (ShapeDefinition)obj;
-            return shapeType == other.shapeType &&
-                   color == other.color &&
-                   radius == other.radius &&
-                   roundness == other.roundness &&
-                   smooth == other.smooth &&
-                   thickness == other.thickness &&
-                   headSize == other.headSize &&
-                   shaftThickness == other.shaftThickness &&
-                   starInner == other.starInner &&
-                   starOuter == other.starOuter &&
-                   starPoints == other.starPoints;
-        }
-
-        public override int GetHashCode()
-        {
-            var hash = new HashCode();
-            hash.Add(shapeType);
-            hash.Add(color);
-            hash.Add(radius);
-            hash.Add(roundness);
-            hash.Add(smooth);
-            hash.Add(thickness);
-            hash.Add(headSize);
-            hash.Add(shaftThickness);
-            hash.Add(starInner);
-            hash.Add(starOuter);
-            hash.Add(starPoints);
-            return hash.ToHashCode();
-        }
-    }
-
-    // Compressed transform: position deltas (new), rotation byte, scale byte
-    public struct CompressedTransform
-    {
-        // Positions now handled separately with deltas
-        public byte rotX, rotY, rotZ, rotW;
-        public byte scaleX, scaleY, scaleZ;
-
-        public static CompressedTransform FromTransformData(TransformData td, Vector3 posMin, Vector3 posMax, Vector3 scaleMin, Vector3 scaleMax)
-        {
-            // Compress position: now handled externally with deltas
-            var ct = new CompressedTransform();
-            
-            // Compress rotation: map [-1, 1] to [0, 255]
-            ct.rotX = (byte)Mathf.Clamp01((td.rotation.x + 1f) * 127.5f);
-            ct.rotY = (byte)Mathf.Clamp01((td.rotation.y + 1f) * 127.5f);
-            ct.rotZ = (byte)Mathf.Clamp01((td.rotation.z + 1f) * 127.5f);
-            ct.rotW = (byte)Mathf.Clamp01((td.rotation.w + 1f) * 127.5f);
-
-            // Compress scale: map to [0, 255]
-            ct.scaleX = (byte)Mathf.Clamp01(Mathf.InverseLerp(scaleMin.x, scaleMax.x, td.scale.x) * 255f);
-            ct.scaleY = (byte)Mathf.Clamp01(Mathf.InverseLerp(scaleMin.y, scaleMax.y, td.scale.y) * 255f);
-            ct.scaleZ = (byte)Mathf.Clamp01(Mathf.InverseLerp(scaleMin.z, scaleMax.z, td.scale.z) * 255f);
-
-            return ct;
-        }
-    }
-
-    // New: Compressed positions with deltas (per texture group) - removed visibilityStream
-    public struct CompressedPositions
-    {
-        public byte[] firstFramePositions; // x,y,z per shape (normalized 0-255)
-        public byte[] bitWidthsX, bitWidthsY, bitWidthsZ; // Per-shape bit widths for deltas
-        public uint[] deltaStream; // Compressed deltas for subsequent frames
-    }
-
-    // New: Bitstream writer for visibility (1 bit per shape)
-    public class VisibilityBitstreamWriter
-    {
-        private readonly List<uint> _stream = new List<uint>();
-        private uint _currentWord = 0;
-        private int _bitsUsed = 0;
-
-        public void WriteBit(bool visible)
-        {
-            uint bit = visible ? 1U : 0U;
-            int bitsRemainingInWord = 32 - _bitsUsed;
-            _currentWord |= bit << (bitsRemainingInWord - 1);
-            _bitsUsed++;
-            if (_bitsUsed == 32)
-            {
-                _stream.Add(_currentWord);
-                _currentWord = 0;
-                _bitsUsed = 0;
-            }
-        }
-
-        public void Flush()
-        {
-            if (_bitsUsed > 0) _stream.Add(_currentWord);
-            _currentWord = 0;
-            _bitsUsed = 0;
-        }
-
-        public uint[] ToArray() => _stream.ToArray();
-    }
-
-    public static void ExportAllFramesToBSON(Dictionary<int, Dictionary<SDFShape, TransformData>> allFrames)
-    {
-        if (allFrames == null || allFrames.Count == 0)
-        {
-            Debug.LogWarning("No frame data to export.");
-            return;
-        }
-
-        string generatedDataPath = GetGeneratedDataPath();
-        string texturesBsonPath = System.IO.Path.Combine(generatedDataPath, "textures.bson");
-        string animationBsonPath = System.IO.Path.Combine(generatedDataPath, "animation.bson");
-
-        // Collect all unique shapes across frames
-        var allShapes = new HashSet<SDFShape>();
-        foreach (var frame in allFrames.Values)
-        {
-            foreach (var shape in frame.Keys)
-            {
-                allShapes.Add(shape);
-            }
-        }
-
-        // Build unique shape definitions and texture index map
-        var shapeDefinitions = new List<ShapeDefinition>();
-        var shapeDefDict = new Dictionary<ShapeDefinition, int>();
-        List<string> uniqueTexturePaths = new List<string>();
-        Dictionary<string, int> textureIndex = new Dictionary<string, int>();
-        long totalTextureBytes = 0;
-
-        foreach (var s in allShapes)
-        {
-            s.RenderToPNG();
-            int w = 0, h = 0;
-            switch (s.emulatedResolution)
-            {
-                case SDFEmulatedResolution.Tex512x512: w = h = 512; break;
-                case SDFEmulatedResolution.Tex256x256: w = h = 256; break;
-                case SDFEmulatedResolution.Tex128x64: w = 128; h = 64; break;
-                default: continue;
-            }
-
-            string texPath = s.BuildOutputFilename(w, h);
-            if (!System.IO.File.Exists(texPath)) continue;
-
-            if (!textureIndex.ContainsKey(texPath))
-            {
-                textureIndex[texPath] = uniqueTexturePaths.Count;
-                uniqueTexturePaths.Add(texPath);
-                totalTextureBytes += new System.IO.FileInfo(texPath).Length;
-            }
-
-            // Create shape definition
-            var shapeDef = new ShapeDefinition
-            {
-                shapeType = s.shapeType,
-                color = s.color,
-                radius = s.radius,
-                roundness = s.roundness,
-                smooth = s.smooth,
-                thickness = s.thickness,
-                headSize = s.headSize,
-                shaftThickness = s.shaftThickness,
-                starInner = s.starInner,
-                starOuter = s.starOuter,
-                starPoints = s.starPoints,
-                textureIndex = textureIndex[texPath]
-            };
-
-            if (!shapeDefDict.ContainsKey(shapeDef))
-            {
-                shapeDefDict[shapeDef] = shapeDefinitions.Count;
-                shapeDefinitions.Add(shapeDef);
-            }
-        }
-
-        // New: Simplify shape definitions to strings
-        var shapeStrings = new List<string>();
-        var shapeStringDict = new Dictionary<string, int>();
-        foreach (var s in allShapes)
-        {
-            string shapeStr = $"{s.shapeType}_r{Math.Round(s.radius, 2)}_rd{Math.Round(s.roundness, 2)}_s{Math.Round(s.smooth, 3)}_t{Math.Round(s.thickness, 2)}";
-            if (!shapeStringDict.ContainsKey(shapeStr))
-            {
-                shapeStringDict[shapeStr] = shapeStrings.Count;
-                shapeStrings.Add(shapeStr);
-            }
-        }
-
-        // Write textures.bson (only index and name)
-        {
-            using (var fs = System.IO.File.Create(texturesBsonPath))
-            using (var writer = new BsonWriter(fs))
-            {
-                var serializer = new JsonSerializer();
-                var root = new JObject();
-                var texturesArray = new JArray();
-                foreach (var kvp in textureIndex)
-                {
-                    var jo = new JObject();
-                    jo["index"] = kvp.Value;
-                    jo["name"] = System.IO.Path.GetFileName(kvp.Key);
-                    texturesArray.Add(jo);
-                }
-                root["textures"] = texturesArray;
-                serializer.Serialize(writer, root);
-            }
-        }
-
-        // Calculate bounds for compression
-        Vector3 posMin = Vector3.zero, posMax = Vector3.zero;
-        bool first = true;
-        foreach (var frame in allFrames.Values)
-        {
-            foreach (var td in frame.Values)
-            {
-                if (first) { posMin = posMax = td.position; first = false; }
-                else
-                {
-                    posMin = Vector3.Min(posMin, td.position);
-                    posMax = Vector3.Max(posMax, td.position);
-                }
-            }
-        }
-        Vector3 posRange = posMax - posMin;
-
-        // New: Group shapes by textureIndex
-        var shapesByTexture = new Dictionary<int, List<SDFShape>>();
-        var shapeStringsByTexture = new Dictionary<int, List<string>>();
-        foreach (var s in allShapes)
-        {
-            int w = 0, h = 0;
-            switch (s.emulatedResolution)
-            {
-                case SDFEmulatedResolution.Tex512x512: w = h = 512; break;
-                case SDFEmulatedResolution.Tex256x256: w = h = 256; break;
-                case SDFEmulatedResolution.Tex128x64: w = 128; h = 64; break;
-                default: continue;
-            }
-            string texPath = s.BuildOutputFilename(w, h);
-            if (!textureIndex.TryGetValue(texPath, out int texIdx)) continue;
-            if (!shapesByTexture.ContainsKey(texIdx)) shapesByTexture[texIdx] = new List<SDFShape>();
-            shapesByTexture[texIdx].Add(s);
-            if (!shapeStringsByTexture.ContainsKey(texIdx)) shapeStringsByTexture[texIdx] = new List<string>();
-            string shapeStr = $"{s.shapeType}_r{Math.Round(s.radius, 2)}_rd{Math.Round(s.roundness, 2)}_s{Math.Round(s.smooth, 3)}_t{Math.Round(s.thickness, 2)}";
-            if (!shapeStringsByTexture[texIdx].Contains(shapeStr)) shapeStringsByTexture[texIdx].Add(shapeStr);
-        }
-
-        // New: Per-texture compression - removed visibility
-        var compressedPositionsByTexture = new Dictionary<int, CompressedPositions>();
-        var orderedFrames = allFrames.OrderBy(k => k.Key).ToList();
-
-        // Build ordered frames list (by frame key) and corresponding frame times
-        var frameTimes = orderedFrames.Select(kv =>
-        {
-            var dict = kv.Value;
-            if (dict != null && dict.Count > 0)
-                return dict.Values.First().time; // all entries in a recorded frame share same time
-            return 0f;
-        }).ToList();
-
-        // Resample frames to requested exportFrameRate (default 30 fps). Optionally set exportFrameRate = 25.
-        float startTime = frameTimes.First();
-        float endTime = frameTimes.Last();
-        float dt = 1.0f / Math.Max(1, exportFrameRate);
-
-        var sampledOrderedFrames = new List<KeyValuePair<int, Dictionary<SDFShape, TransformData>>>();
-        int lastChosenIndex = -1;
-        for (float t = startTime; t <= endTime + 1e-6f; t += dt)
-        {
-            // find nearest recorded frame index to target time t
-            int bestIdx = 0;
-            float bestDist = Math.Abs(frameTimes[0] - t);
-            for (int i = 1; i < frameTimes.Count; i++)
-            {
-                float d = Math.Abs(frameTimes[i] - t);
-                if (d < bestDist) { bestDist = d; bestIdx = i; }
-            }
-            // avoid consecutive duplicates
-            if (bestIdx != lastChosenIndex)
-            {
-                sampledOrderedFrames.Add(orderedFrames[bestIdx]);
-                lastChosenIndex = bestIdx;
-            }
-        }
-        // ensure the final recorded frame is included
-        if (sampledOrderedFrames.Count == 0 || !sampledOrderedFrames.Last().Equals(orderedFrames.Last()))
-            sampledOrderedFrames.Add(orderedFrames.Last());
-
-        // Use sampledOrderedFrames instead of orderedFrames for compression and writing
-        foreach (var kvp in shapesByTexture)
-        {
-            int texIdx = kvp.Key;
-            var shapesInGroup = kvp.Value.OrderBy(s => s.GetInstanceID()).ToList();
-            var compressed = new CompressedPositions
-            {
-                firstFramePositions = new byte[shapesInGroup.Count * 3],
-                bitWidthsX = new byte[shapesInGroup.Count],
-                bitWidthsY = new byte[shapesInGroup.Count],
-                bitWidthsZ = new byte[shapesInGroup.Count]
-            };
-
-            // First sampled frame positions
-            var firstSampledFrame = sampledOrderedFrames.First().Value;
-            for (int i = 0; i < shapesInGroup.Count; i++)
-            {
-                var shape = shapesInGroup[i];
-                if (firstSampledFrame.TryGetValue(shape, out var td))
-                {
-                    compressed.firstFramePositions[i * 3] = (byte)((td.position.x - posMin.x) / posRange.x * 255f);
-                    compressed.firstFramePositions[i * 3 + 1] = (byte)((td.position.y - posMin.y) / posRange.y * 255f);
-                    compressed.firstFramePositions[i * 3 + 2] = (byte)((td.position.z - posMin.z) / posRange.z * 255f);
-                }
-            }
-
-            // Bit widths for deltas based on sampled frames
-            for (int i = 0; i < shapesInGroup.Count; i++)
-            {
-                var shape = shapesInGroup[i];
-                int maxDx = 0, maxDy = 0, maxDz = 0;
-                for (int f = 1; f < sampledOrderedFrames.Count; f++)
-                {
-                    var prevFrame = sampledOrderedFrames[f - 1].Value;
-                    var currFrame = sampledOrderedFrames[f].Value;
-                    if (prevFrame.TryGetValue(shape, out var prevTd) && currFrame.TryGetValue(shape, out var currTd))
-                    {
-                        int dx = (int)((currTd.position.x - posMin.x) / posRange.x * 255f) - (int)((prevTd.position.x - posMin.x) / posRange.x * 255f);
-                        int dy = (int)((currTd.position.y - posMin.y) / posRange.y * 255f) - (int)((prevTd.position.y - posMin.y) / posRange.y * 255f);
-                        int dz = (int)((currTd.position.z - posMin.z) / posRange.z * 255f) - (int)((prevTd.position.z - posMin.z) / posRange.z * 255f);
-                        maxDx = Math.Max(maxDx, Math.Abs(dx));
-                        maxDy = Math.Max(maxDy, Math.Abs(dy));
-                        maxDz = Math.Max(maxDz, Math.Abs(dz));
-                    }
-                }
-                compressed.bitWidthsX[i] = BitsForDelta(maxDx);
-                compressed.bitWidthsY[i] = BitsForDelta(maxDy);
-                compressed.bitWidthsZ[i] = BitsForDelta(maxDz);
-            }
-
-            // Compress deltas across sampled frames
-            var deltaWriter = new BitstreamWriter();
-            for (int f = 1; f < sampledOrderedFrames.Count; f++)
-            {
-                var prevFrame = sampledOrderedFrames[f - 1].Value;
-                var currFrame = sampledOrderedFrames[f].Value;
-                for (int i = 0; i < shapesInGroup.Count; i++)
-                {
-                    var shape = shapesInGroup[i];
-                    if (prevFrame.TryGetValue(shape, out var prevTd) && currFrame.TryGetValue(shape, out var currTd))
-                    {
-                        int dx = (int)((currTd.position.x - posMin.x) / posRange.x * 255f) - (int)((prevTd.position.x - posMin.x) / posRange.x * 255f);
-                        int dy = (int)((currTd.position.y - posMin.y) / posRange.y * 255f) - (int)((prevTd.position.y - posMin.y) / posRange.y * 255f);
-                        int dz = (int)((currTd.position.z - posMin.z) / posRange.z * 255f) - (int)((prevTd.position.z - posMin.z) / posRange.z * 255f);
-                        deltaWriter.Write((uint)dx, compressed.bitWidthsX[i]);
-                        deltaWriter.Write((uint)dy, compressed.bitWidthsY[i]);
-                        deltaWriter.Write((uint)dz, compressed.bitWidthsZ[i]);
-                    }
-                }
-            }
-            deltaWriter.Flush();
-            compressed.deltaStream = deltaWriter.ToArray();
-
-            compressedPositionsByTexture[texIdx] = compressed;
-        }
-
-        // Update posMin/posMax/posRange using sampled frames for accurate bounds
-        posMin = Vector3.zero;
-        posMax = Vector3.zero;
-        bool firstPosSampled = true;
-        foreach (var kv in sampledOrderedFrames)
-        {
-            foreach (var td in kv.Value.Values)
-            {
-                if (firstPosSampled) { posMin = posMax = td.position; firstPosSampled = false; }
-                else { posMin = Vector3.Min(posMin, td.position); posMax = Vector3.Max(posMax, td.position); }
-            }
-        }
-        posRange = posMax - posMin;
-
-        // Write animation.bson - restructured for draw calls
-        {
-            using (var fs = System.IO.File.Create(animationBsonPath))
-            using (var writerBson = new BsonWriter(fs))
-            {
-                var serializer = new JsonSerializer();
-                var root = new JObject();
-                var drawCallsArray = new JArray();
-
-                foreach (var texKvp in shapesByTexture)
-                {
-                    int texIdx = texKvp.Key;
-                    var drawCallObj = new JObject();
-                    drawCallObj["textureIndex"] = texIdx;
-
-                    // Shapes for this texture
-                    var shapesArray = new JArray();
-                    foreach (var shapeStr in shapeStringsByTexture[texIdx])
-                    {
-                        shapesArray.Add(shapeStr);
-                    }
-                    drawCallObj["shapes"] = shapesArray;
-
-                    // Compressed positions for this texture
-                    var compressed = compressedPositionsByTexture[texIdx];
-                    var compressedObj = new JObject();
-                    compressedObj["firstFramePositions"] = JToken.FromObject(compressed.firstFramePositions);
-                    compressedObj["bitWidthsX"] = JToken.FromObject(compressed.bitWidthsX);
-                    compressedObj["bitWidthsY"] = JToken.FromObject(compressed.bitWidthsY);
-                    compressedObj["bitWidthsZ"] = JToken.FromObject(compressed.bitWidthsZ);
-                    compressedObj["deltaStream"] = JToken.FromObject(compressed.deltaStream);
-                    drawCallObj["compressedPositions"] = compressedObj;
-
-                    drawCallsArray.Add(drawCallObj);
-                }
-
-                root["drawCalls"] = drawCallsArray;
-
-                // Frames with drawCallIndex and shapeIndexInDrawCall
-                var framesArray = new JArray();
-                foreach (var kvp in sampledOrderedFrames)
-                {
-                    int frameNumber = kvp.Key;
-                    var frameShapes = kvp.Value;
-
-                    var frameObj = new JObject();
-                    frameObj["frameNumber"] = frameNumber;
-                    
-                    var instancesArray = new JArray();
-                    foreach (var texKvp in shapesByTexture)
-                    {
-                        int texIdx = texKvp.Key;
-                        var shapesInGroup = texKvp.Value.OrderBy(s => s.GetInstanceID()).ToList();
-                        var shapeStringsInGroup = shapeStringsByTexture[texIdx];
-                        for (int i = 0; i < shapesInGroup.Count; i++)
-                        {
-                            var shape = shapesInGroup[i];
-                            if (frameShapes.TryGetValue(shape, out var td))
-                            {
-                                string shapeStr = $"{shape.shapeType}_r{Math.Round(shape.radius, 2)}_rd{Math.Round(shape.roundness, 2)}_s{Math.Round(shape.smooth, 3)}_t{Math.Round(shape.thickness, 2)}";
-                                int shapeIndexInDrawCall = shapeStringsInGroup.IndexOf(shapeStr);
-
-                                var instanceObj = new JObject();
-                                instanceObj["drawCallIndex"] = texIdx; // Assuming texIdx as drawCallIndex for simplicity
-                                instanceObj["shapeIndexInDrawCall"] = shapeIndexInDrawCall;
-
-                                instancesArray.Add(instanceObj);
-                            }
-                        }
-                    }
-
-                    frameObj["instances"] = instancesArray;
-                    framesArray.Add(frameObj);
-                }
-
-                root["frames"] = framesArray;
-                root["posMin"] = new JArray(posMin.x, posMin.y, posMin.z);
-                root["posMax"] = new JArray(posMax.x, posMax.y, posMax.z);
-                serializer.Serialize(writerBson, root);
-            }
-        }
-
-        Debug.Log($"Exported {uniqueTexturePaths.Count} textures, {shapeDefinitions.Count} unique shapes, and {allFrames.Count} frames to {generatedDataPath}");
     }
 
     // New: Calculate hypothetical framerate based on vertex count
@@ -1091,22 +601,126 @@ public class SDFShape : MonoBehaviour
         }
     }
 
-    // New: Helper to compute bits needed for delta
-    private static byte BitsForDelta(int delta)
-    {
-        int d = Math.Abs(delta);
-        if (d == 0) return 1;
-        int bits = 1;
-        while ((1 << (bits - 1)) <= d) bits++;
-        return (byte)bits;
-    }
-
     private static string GetGeneratedDataPath()
     {
         string projectRoot = Application.dataPath.Replace("/Assets", "");
         string generatedDataPath = System.IO.Path.Combine(projectRoot, "GeneratedData");
         if (!System.IO.Directory.Exists(generatedDataPath)) System.IO.Directory.CreateDirectory(generatedDataPath);
         return generatedDataPath;
+    }
+
+    [MenuItem("Ziz/Export All Shapes to RATs")]
+    public static void ExportAllShapesToRATs()
+    {
+        if (!EditorApplication.isPlaying)
+        {
+            EditorUtility.DisplayDialog("Error", "This function must be run in play mode.", "OK");
+            return;
+        }
+
+        var allShapes = FindObjectsOfType<SDFShape>();
+        if (allShapes.Length == 0)
+        {
+            EditorUtility.DisplayDialog("Info", "No SDFShape objects found in the scene.", "OK");
+            return;
+        }
+
+        string outputDir = EditorUtility.OpenFolderPanel("Save RAT Files To", "Assets/GeneratedData", "");
+        if (string.IsNullOrEmpty(outputDir))
+        {
+            return;
+        }
+
+        // Group shapes by texture
+        var shapesByTexture = new Dictionary<string, List<SDFShape>>();
+        foreach (var shape in allShapes)
+        {
+            int w = 0, h = 0;
+            switch (shape.emulatedResolution)
+            {
+                case SDFEmulatedResolution.Tex512x512: w = h = 512; break;
+                case SDFEmulatedResolution.Tex256x256: w = h = 256; break;
+                case SDFEmulatedResolution.Tex128x64: w = 128; h = 64; break;
+                default: continue;
+            }
+            string texPath = shape.BuildOutputFilename(w, h);
+            if (!shapesByTexture.ContainsKey(texPath))
+            {
+                shapesByTexture[texPath] = new List<SDFShape>();
+            }
+            shapesByTexture[texPath].Add(shape);
+        }
+
+        int exportedFiles = 0;
+        foreach (var kvp in shapesByTexture)
+        {
+            string texPath = kvp.Key;
+            List<SDFShape> shapesInGroup = kvp.Value;
+
+            string ratFilename = System.IO.Path.GetFileNameWithoutExtension(texPath) + ".rat";
+            string outputPath = System.IO.Path.Combine(outputDir, ratFilename);
+
+            // Use the GLBToRAT converter's logic
+            var converter = new Rat.CommandLine.GLBToRAT();
+            
+            // Collect all vertices and indices from all shapes across all frames
+            List<Vector3[]> allFramesVertices = new List<Vector3[]>();
+            List<ushort> allIndices = new List<ushort>();
+            List<Vector2> allUVs = new List<Vector2>();
+            List<Color> allColors = new List<Color>();
+
+            if (frameTransforms.Keys.Count == 0) continue;
+            
+            int totalFrames = frameTransforms.Keys.Max() + 1;
+            int vertexCount = shapesInGroup.Count * 4;
+
+            for (int i = 0; i < shapesInGroup.Count; i++)
+            {
+                allIndices.AddRange(new ushort[] { (ushort)(i*4), (ushort)(i*4+1), (ushort)(i*4+2), (ushort)(i*4+2), (ushort)(i*4+1), (ushort)(i*4+3) });
+                allUVs.AddRange(new Vector2[] { new Vector2(0,0), new Vector2(1,0), new Vector2(0,1), new Vector2(1,1) });
+                allColors.AddRange(new Color[] { shapesInGroup[i].color, shapesInGroup[i].color, shapesInGroup[i].color, shapesInGroup[i].color });
+            }
+
+            var orderedFrames = frameTransforms.OrderBy(f => f.Key).ToList();
+
+            foreach (var frameKvp in orderedFrames)
+            {
+                var frameData = frameKvp.Value;
+                Vector3[] frameVertices = new Vector3[vertexCount];
+                int currentVertex = 0;
+                foreach (var shape in shapesInGroup)
+                {
+                    if (frameData.TryGetValue(shape, out var transformData))
+                    {
+                        Matrix4x4 mat = Matrix4x4.TRS(transformData.position, transformData.rotation, transformData.scale);
+                        frameVertices[currentVertex++] = mat.MultiplyPoint3x4(new Vector3(-0.5f, -0.5f, 0));
+                        frameVertices[currentVertex++] = mat.MultiplyPoint3x4(new Vector3( 0.5f, -0.5f, 0));
+                        frameVertices[currentVertex++] = mat.MultiplyPoint3x4(new Vector3(-0.5f,  0.5f, 0));
+                        frameVertices[currentVertex++] = mat.MultiplyPoint3x4(new Vector3( 0.5f,  0.5f, 0));
+                    }
+                    else
+                    {
+                        // Add empty/degenerate vertices if shape is not in this frame
+                        frameVertices[currentVertex++] = Vector3.zero;
+                        frameVertices[currentVertex++] = Vector3.zero;
+                        frameVertices[currentVertex++] = Vector3.zero;
+                        frameVertices[currentVertex++] = Vector3.zero;
+                    }
+                }
+                allFramesVertices.Add(frameVertices);
+            }
+
+            if (allFramesVertices.Count == 0) continue;
+
+            // Now, we have the data in a format that can be compressed.
+            var compressedAnimation = Rat.CommandLine.GLBToRAT.CompressFrames(allFramesVertices, allIndices.ToArray(), allUVs.ToArray(), allColors.ToArray());
+            
+            // Write the compressed data to a .rat file
+            Rat.CommandLine.GLBToRAT.WriteRatFile(outputPath, compressedAnimation);
+            exportedFiles++;
+        }
+
+        EditorUtility.DisplayDialog("Success", $"Exported {exportedFiles} RAT files to {outputDir}", "OK");
     }
 
 #endif

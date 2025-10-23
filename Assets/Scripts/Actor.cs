@@ -50,14 +50,12 @@ public struct ActorTransform
 [System.Serializable]
 public class ActorAnimationData
 {
-    public List<string> ratFilePaths;       // List of RAT file paths (for split files)
+    public List<string> ratFilePaths = new List<string>();       // List of RAT file paths (for split files)
     public float framerate;                 // Animation framerate
-    public List<ActorTransformFloat> transforms; // Transform for each keyframe (stored as floats)
+    public List<ActorTransformFloat> transforms = new List<ActorTransformFloat>(); // Transform for each keyframe (stored as floats)
     
     public ActorAnimationData()
     {
-        transforms = new List<ActorTransformFloat>();
-        ratFilePaths = new List<string>();
         framerate = 30f;
     }
     
@@ -90,6 +88,11 @@ public struct ActorTransformFloat
 
 public class Actor : MonoBehaviour
 {
+    public ActorAnimationData AnimationData { get; private set; } = new ActorAnimationData();
+    
+    [Header("Recording Settings")]
+    public bool record = false;
+
     // Auto-generated fields (not shown in Inspector)
     private string ratFilePath = "";    // Auto-generated from transform name
     private string baseFilename = "";   // Auto-generated from transform name
@@ -106,7 +109,6 @@ public class Actor : MonoBehaviour
     private string lastTransformName = ""; // Track transform name changes
     
     // Animation recording data
-    private ActorAnimationData animationData;
     private bool isRecording = false;
     private float recordingStartTime;
     private uint recordedFrameCount;
@@ -121,7 +123,6 @@ public class Actor : MonoBehaviour
     public string RatFilePath => ratFilePath;
     public string TextureFilename => textureFilename;
     public bool IsRecording => isRecording;
-    public ActorAnimationData AnimationData => animationData;
     public string BaseFilename => baseFilename;
     public float AnimationDuration => animationDuration;
     
@@ -377,7 +378,7 @@ public class Actor : MonoBehaviour
     private void OnDestroy()
     {
         // Save files when component is destroyed (including when exiting play mode)
-        if (isRecording && animationData != null && animationData.transforms.Count > 0)
+        if (isRecording && AnimationData != null && AnimationData.transforms.Count > 0)
         {
             StopTransformRecording();
         }
@@ -592,15 +593,15 @@ public class Actor : MonoBehaviour
         Debug.Log($"Actor '{name}': RAT model center (for reference): {ratModelCenter}");
         
         // Initialize animation data
-        animationData = new ActorAnimationData();
-        animationData.ratFilePath = ratFilePath;
-        animationData.framerate = frameRate;
+        AnimationData = new ActorAnimationData();
+        AnimationData.ratFilePath = ratFilePath;
+        AnimationData.framerate = frameRate;
         
         isRecording = true;
         recordingStartTime = Time.time;
         recordedFrameCount = 0;
         
-        Debug.Log($"Actor '{name}': Started recording transforms at {animationData.framerate} FPS for {animationDuration} seconds");
+        Debug.Log($"Actor '{name}': Started recording transforms at {AnimationData.framerate} FPS for {animationDuration} seconds");
         Debug.Log($"Actor '{name}': Will save to {baseFilename}.rat and {baseFilename}.act");
         Debug.Log($"Actor '{name}': Position represents model center for RAT vertex deltas");
     }
@@ -621,7 +622,7 @@ public class Actor : MonoBehaviour
             rat_local_frame = recordedFrameCount // Will be updated later with correct local frame index
         };
         
-        animationData.transforms.Add(transform);
+        AnimationData.transforms.Add(transform);
         recordedFrameCount++;
     }
     
@@ -645,7 +646,7 @@ public class Actor : MonoBehaviour
     /// </summary>
     public void SaveBothFiles()
     {
-        if (animationData == null || animationData.transforms.Count == 0)
+        if (AnimationData == null || AnimationData.transforms.Count == 0)
         {
             Debug.LogError($"Actor '{name}': No animation data to save!");
             return;
@@ -683,10 +684,10 @@ public class Actor : MonoBehaviour
             }
             
             // Update the RAT file paths in our animation data
-            if (animationData.ratFilePaths.Count == 0)
+            if (AnimationData.ratFilePaths.Count == 0)
             {
                 // If no RAT files specified yet, add the default single file path for compatibility
-                animationData.ratFilePaths.Add(ratFilePath);
+                AnimationData.ratFilePaths.Add(ratFilePath);
             }
             
             // TODO: Get actual RAT file list from RatRecorder when it implements size-based splitting
@@ -696,14 +697,14 @@ public class Actor : MonoBehaviour
             UpdateTransformRatFileReferences();
             
             // Save Actor data with .act extension
-            SaveActorData(actorFilePath, animationData);
+            SaveActorData(actorFilePath, AnimationData);
             
             Debug.Log($"Actor '{name}': Actor file saved successfully:");
             Debug.Log($"  - Actor file: {actorFilePath} (transform animation)");
             Debug.Log($"  - References RAT file: {ratFilePath} (vertex animation)");
-            Debug.Log($"  - Total frames: {animationData.transforms.Count}");
-            Debug.Log($"  - Framerate: {animationData.framerate} FPS");
-            Debug.Log($"  - Duration: {(animationData.transforms.Count / animationData.framerate):F2} seconds");
+            Debug.Log($"  - Total frames: {AnimationData.transforms.Count}");
+            Debug.Log($"  - Framerate: {AnimationData.framerate} FPS");
+            Debug.Log($"  - Duration: {(AnimationData.transforms.Count / AnimationData.framerate):F2} seconds");
             
             if (ratRecorder != null)
             {
@@ -928,22 +929,22 @@ public class Actor : MonoBehaviour
     /// </summary>
     private void UpdateTransformRatFileReferences()
     {
-        if (animationData == null || animationData.transforms.Count == 0)
+        if (AnimationData == null || AnimationData.transforms.Count == 0)
             return;
             
         // For now, since we don't have the actual RAT file frame counts,
         // we'll assign all transforms to the first RAT file
         // TODO: Update this when RatRecorder provides actual file splitting information
         
-        for (int i = 0; i < animationData.transforms.Count; i++)
+        for (int i = 0; i < AnimationData.transforms.Count; i++)
         {
-            var transform = animationData.transforms[i];
+            var transform = AnimationData.transforms[i];
             transform.rat_file_index = 0; // All frames go to first RAT file for now
             transform.rat_local_frame = (uint)i; // Frame index within that RAT file
-            animationData.transforms[i] = transform;
+            AnimationData.transforms[i] = transform;
         }
         
-        Debug.Log($"Actor '{name}': Updated {animationData.transforms.Count} transforms with RAT file references");
+        Debug.Log($"Actor '{name}': Updated {AnimationData.transforms.Count} transforms with RAT file references");
     }
 
     /// <summary>
@@ -954,12 +955,12 @@ public class Actor : MonoBehaviour
     /// <param name="framesPerFile">Number of frames in each RAT file</param>
     public void SetRatFileReferences(List<string> createdRatFiles, List<uint> framesPerFile)
     {
-        if (animationData == null)
+        if (AnimationData == null)
             return;
             
         // Update the RAT file paths
-        animationData.ratFilePaths.Clear();
-        animationData.ratFilePaths.AddRange(createdRatFiles);
+        AnimationData.ratFilePaths.Clear();
+        AnimationData.ratFilePaths.AddRange(createdRatFiles);
         
         // Update transform data with correct RAT file and frame mappings
         uint globalFrameIndex = 0;
@@ -968,12 +969,12 @@ public class Actor : MonoBehaviour
         {
             uint framesInThisFile = framesPerFile[fileIndex];
             
-            for (uint localFrame = 0; localFrame < framesInThisFile && globalFrameIndex < animationData.transforms.Count; localFrame++)
+            for (uint localFrame = 0; localFrame < framesInThisFile && globalFrameIndex < AnimationData.transforms.Count; localFrame++)
             {
-                var transform = animationData.transforms[(int)globalFrameIndex];
+                var transform = AnimationData.transforms[(int)globalFrameIndex];
                 transform.rat_file_index = (uint)fileIndex;
                 transform.rat_local_frame = localFrame;
-                animationData.transforms[(int)globalFrameIndex] = transform;
+                AnimationData.transforms[(int)globalFrameIndex] = transform;
                 
                 globalFrameIndex++;
             }
@@ -1037,10 +1038,10 @@ public class Actor : MonoBehaviour
     /// <param name="keyframeIndex">The keyframe index to apply</param>
     public void ApplyKeyframe(uint keyframeIndex)
     {
-        if (animationData == null || keyframeIndex >= animationData.transforms.Count)
+        if (AnimationData == null || keyframeIndex >= AnimationData.transforms.Count)
             return;
             
-        var keyframe = animationData.transforms[(int)keyframeIndex];
+        var keyframe = AnimationData.transforms[(int)keyframeIndex];
         
         transform.position = keyframe.position;
         transform.eulerAngles = keyframe.rotation;
@@ -1198,7 +1199,7 @@ public class Actor : MonoBehaviour
     /// <returns>True if data is synchronized, false otherwise</returns>
     public bool ValidateWithRatFile(string ratFilePath = null)
     {
-        if (animationData == null || animationData.transforms.Count == 0)
+        if (AnimationData == null || AnimationData.transforms.Count == 0)
         {
             Debug.LogError($"Actor '{name}': No animation data to validate");
             return false;
@@ -1207,10 +1208,10 @@ public class Actor : MonoBehaviour
         // Determine which RAT files to validate
         List<string> ratFilesToValidate = new List<string>();
         
-        if (animationData.ratFilePaths.Count > 0)
+        if (AnimationData.ratFilePaths.Count > 0)
         {
             // Multi-RAT setup - validate all referenced files
-            ratFilesToValidate.AddRange(animationData.ratFilePaths);
+            ratFilesToValidate.AddRange(AnimationData.ratFilePaths);
             Debug.Log($"Actor '{name}': Validating multi-RAT setup with {ratFilesToValidate.Count} files");
         }
         else if (!string.IsNullOrEmpty(ratFilePath))
@@ -1276,16 +1277,16 @@ public class Actor : MonoBehaviour
         }
         
         // Validate total frame count matches
-        if (totalRatFrames != animationData.transforms.Count)
+        if (totalRatFrames != AnimationData.transforms.Count)
         {
-            Debug.LogError($"Actor '{name}': Total frame count mismatch! RAT files: {totalRatFrames}, Actor transforms: {animationData.transforms.Count}");
+            Debug.LogError($"Actor '{name}': Total frame count mismatch! RAT files: {totalRatFrames}, Actor transforms: {AnimationData.transforms.Count}");
             allFilesValid = false;
         }
         
         // Validate transform RAT file references
-        for (int i = 0; i < animationData.transforms.Count; i++)
+        for (int i = 0; i < AnimationData.transforms.Count; i++)
         {
-            var transform = animationData.transforms[i];
+            var transform = AnimationData.transforms[i];
             if (transform.rat_file_index >= ratFilesToValidate.Count)
             {
                 Debug.LogError($"Actor '{name}': Transform {i} references invalid RAT file index {transform.rat_file_index} (max: {ratFilesToValidate.Count - 1})");
@@ -1297,7 +1298,7 @@ public class Actor : MonoBehaviour
         {
             Debug.Log($"Actor '{name}': Validation successful!");
             Debug.Log($"  - {ratFilesToValidate.Count} RAT file(s) with {totalRatFrames} total frames");
-            Debug.Log($"  - {animationData.transforms.Count} Actor transforms at {animationData.framerate} FPS");
+            Debug.Log($"  - {AnimationData.transforms.Count} Actor transforms at {AnimationData.framerate} FPS");
             Debug.Log($"  - Position represents model center for RAT vertex calculations");
             Debug.Log($"  - C engine ready for loading!");
         }
@@ -1313,15 +1314,15 @@ public class Actor : MonoBehaviour
     /// <returns>Tuple of (rat_file_index, rat_local_frame, rat_filename) or null if invalid</returns>
     public (uint ratFileIndex, uint ratLocalFrame, string ratFileName)? GetRatFileInfoForKeyframe(uint globalKeyframe)
     {
-        if (animationData == null || globalKeyframe >= animationData.transforms.Count)
+        if (AnimationData == null || globalKeyframe >= AnimationData.transforms.Count)
             return null;
             
-        var transform = animationData.transforms[(int)globalKeyframe];
+        var transform = AnimationData.transforms[(int)globalKeyframe];
         
-        if (transform.rat_file_index >= animationData.ratFilePaths.Count)
+        if (transform.rat_file_index >= AnimationData.ratFilePaths.Count)
             return null;
             
-        string ratFileName = animationData.ratFilePaths[(int)transform.rat_file_index];
+        string ratFileName = AnimationData.ratFilePaths[(int)transform.rat_file_index];
         
         return (transform.rat_file_index, transform.rat_local_frame, ratFileName);
     }
@@ -1331,23 +1332,23 @@ public class Actor : MonoBehaviour
     /// </summary>
     public void PrintRatFileMappingSummary()
     {
-        if (animationData == null)
+        if (AnimationData == null)
         {
             Debug.Log($"Actor '{name}': No animation data");
             return;
         }
         
         Debug.Log($"=== RAT File Mapping Summary for Actor '{name}' ===");
-        Debug.Log($"Total keyframes: {animationData.transforms.Count}");
-        Debug.Log($"RAT files referenced: {animationData.ratFilePaths.Count}");
+        Debug.Log($"Total keyframes: {AnimationData.transforms.Count}");
+        Debug.Log($"RAT files referenced: {AnimationData.ratFilePaths.Count}");
         
-        for (int i = 0; i < animationData.ratFilePaths.Count; i++)
+        for (int i = 0; i < AnimationData.ratFilePaths.Count; i++)
         {
-            Debug.Log($"  RAT File {i}: {animationData.ratFilePaths[i]}");
+            Debug.Log($"  RAT File {i}: {AnimationData.ratFilePaths[i]}");
         }
         
         // Show first few and last few keyframe mappings
-        int showCount = Mathf.Min(5, animationData.transforms.Count);
+        int showCount = Mathf.Min(5, AnimationData.transforms.Count);
         
         Debug.Log($"First {showCount} keyframe mappings:");
         for (int i = 0; i < showCount; i++)
@@ -1359,12 +1360,12 @@ public class Actor : MonoBehaviour
             }
         }
         
-        if (animationData.transforms.Count > showCount * 2)
+        if (AnimationData.transforms.Count > showCount * 2)
         {
             Debug.Log($"... (skipping middle keyframes) ...");
             
             Debug.Log($"Last {showCount} keyframe mappings:");
-            for (int i = animationData.transforms.Count - showCount; i < animationData.transforms.Count; i++)
+            for (int i = AnimationData.transforms.Count - showCount; i < AnimationData.transforms.Count; i++)
             {
                 var info = GetRatFileInfoForKeyframe((uint)i);
                 if (info.HasValue)
