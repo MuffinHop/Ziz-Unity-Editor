@@ -62,7 +62,6 @@ public class Level : MonoBehaviour
     
     [Header("File Format")]
     public bool useEndianSafeBinaryFormat = true;
-    public bool generateFileAnalysis = true;
     
     [Header("Debug")]
     public bool showDebugInfo = false;
@@ -295,12 +294,6 @@ public class Level : MonoBehaviour
         {
             Debug.Log($"BSP tree built with {leafNodes.Count} leaf nodes");
             Debug.Log($"PVS computed for {leafPVSData.Count} leaves");
-        }
-        
-        // Generate comprehensive analysis
-        if (generateFileAnalysis)
-        {
-            GenerateFileAnalysis();
         }
         
         Debug.Log($"Level exported: {worldVertices.Count} vertices, {faces.Count} faces");
@@ -692,10 +685,6 @@ public class Level : MonoBehaviour
         // Continue with file export
         WriteEMUFile();
         
-        if (generateFileAnalysis)
-        {
-            GenerateFileAnalysis();
-        }
     }
     
     /// <summary>
@@ -1413,90 +1402,6 @@ public class Level : MonoBehaviour
     {
         WriteVector3(writer, bounds.center);
         WriteVector3(writer, bounds.size);
-    }
-    
-    /// <summary>
-    /// Generate comprehensive file analysis
-    /// </summary>
-    private void GenerateFileAnalysis()
-    {
-        StringBuilder analysis = new StringBuilder();
-        analysis.AppendLine("=== COMPREHENSIVE EMU FILE ANALYSIS ===");
-        analysis.AppendLine($"📁 Generated: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
-        analysis.AppendLine($"🎮 Unity Version: {Application.unityVersion}");
-        analysis.AppendLine();
-        
-        analysis.AppendLine("📊 GEOMETRY STATISTICS:");
-        analysis.AppendLine($"  • Vertices: {worldVertices.Count:N0}");
-        analysis.AppendLine($"  • Faces: {faces.Count:N0}");
-        analysis.AppendLine($"  • Average vertices per face: {(float)worldVertices.Count/faces.Count:F2}");
-        analysis.AppendLine();
-        
-        analysis.AppendLine("🌳 BSP TREE STATISTICS:");
-        analysis.AppendLine($"  • Total leaf nodes: {leafNodes.Count:N0}");
-        analysis.AppendLine($"  • Maximum depth reached: {maxBSPDepth}");
-        analysis.AppendLine($"  • Average faces per leaf: {(float)faces.Count/leafNodes.Count:F2}");
-        analysis.AppendLine();
-        
-        analysis.AppendLine("👁️ PVS STATISTICS:");
-        analysis.AppendLine($"  • Leaves with PVS data: {leafPVSData.Count:N0}");
-        
-        if (leafPVSData.Count > 0)
-        {
-            int totalPVSSize = leafPVSData.Values.Sum(data => data.Length);
-            analysis.AppendLine($"  • Total PVS data size: {totalPVSSize:N0} bytes ({totalPVSSize/1024:F1} KB)");
-            analysis.AppendLine($"  • Average PVS size per leaf: {totalPVSSize/leafPVSData.Count:F1} bytes");
-            analysis.AppendLine($"  • Compression ratio: {(float)totalPVSSize/(leafNodes.Count*leafNodes.Count/8)*100:F1}%");
-        }
-        
-        analysis.AppendLine();
-        analysis.AppendLine("⚙️ UNITY API FEATURES USED:");
-        analysis.AppendLine($"  • RenderTexture System: {(useUnityRenderTextures ? "✅" : "❌")}");
-        analysis.AppendLine($"  • GeometryUtility: {(useFrustumCulling ? "✅" : "❌")}");
-        analysis.AppendLine($"  • Occlusion Culling: {(useUnityOcclusionCulling ? "✅" : "❌")}");
-        analysis.AppendLine($"  • Color ID Encoding: {(useColorIDEncoding ? "✅" : "❌")}");
-        analysis.AppendLine($"  • Async Computation: {(useAsyncPVSComputation ? "✅" : "❌")}");
-        analysis.AppendLine();
-        
-        analysis.AppendLine("⚡ PERFORMANCE METRICS:");
-        analysis.AppendLine($"  • Total computation time: {lastComputationTime}ms");
-        analysis.AppendLine($"  • PVS computation rate: {processedLeafCount*1000f/lastComputationTime:F1} leaves/second");
-        
-        long memoryUsage = System.GC.GetTotalMemory(false);
-        analysis.AppendLine($"  • Peak memory usage: {memoryUsage/(1024*1024)}MB");
-        analysis.AppendLine();
-        
-        analysis.AppendLine("🔧 CONFIGURATION:");
-        analysis.AppendLine($"  • Max BSP depth: {maxBSPDepth}");
-        analysis.AppendLine($"  • Min faces per leaf: {minFacesPerLeaf}");
-        analysis.AppendLine($"  • Max visibility distance: {maxVisibilityDistance}m");
-        analysis.AppendLine($"  • Render texture size: {renderTextureSize}x{renderTextureSize}");
-        analysis.AppendLine($"  • PVS batch size: {pvsComputationBatchSize}");
-        analysis.AppendLine();
-        
-        analysis.AppendLine("✨ UNITY ENHANCEMENTS:");
-        analysis.AppendLine("  • Hardware-accelerated PVS computation");
-        analysis.AppendLine("  • Multi-directional visibility sampling");
-        analysis.AppendLine("  • Frustum culling optimization");
-        analysis.AppendLine("  • Memory-efficient data structures");
-        analysis.AppendLine("  • Real-time progress monitoring");
-        analysis.AppendLine("  • Async computation for large scenes");
-        analysis.AppendLine("=====================================");
-        
-        // Save analysis to GeneratedData folder
-        string projectRoot = Application.dataPath.Replace("/Assets", "");
-        string generatedDataPath = Path.Combine(projectRoot, "GeneratedData");
-        
-        if (!Directory.Exists(generatedDataPath))
-        {
-            Directory.CreateDirectory(generatedDataPath);
-        }
-        
-        string analysisPath = Path.Combine(generatedDataPath, $"analysis_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
-        File.WriteAllText(analysisPath, analysis.ToString());
-        
-        Debug.Log(analysis.ToString());
-        Debug.Log($"Analysis saved to: {analysisPath}");
     }
     
     void OnDestroy()
