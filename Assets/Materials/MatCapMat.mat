@@ -70,34 +70,34 @@ Material:
     - _DetailNormalMapScale: 1
     - _DstBlend: 0
     - _Exposure: 1
-    - _FresnelPower: 2.14
+    - _FresnelPower: 1
     - _GamutClamp: 1
     - _GlossMapScale: 1
     - _Glossiness: 0.5
     - _GlossyReflections: 1
-    - _Metallic: 0.361
+    - _Metallic: 0
     - _Mode: 0
     - _OcclusionStrength: 1
     - _Parallax: 0.02
-    - _Roughness: 0.525
-    - _SSSScale: 0.215
-    - _SSSStrength: 0.138
+    - _Roughness: 0.25
+    - _SSSScale: 0.5
+    - _SSSStrength: 0
     - _SmoothnessTextureChannel: 0
     - _SpecularHighlights: 1
     - _SpecularTint: 0.083
     - _SrcBlend: 1
     - _UVSec: 0
     - _UseACES: 1
-    - _UseFresnel: 0
+    - _UseFresnel: 1
     - _UseIBL: 1
     - _ZWrite: 1
     m_Colors:
-    - _BaseColor: {r: 0.5728907, g: 0.7430989, b: 0.7735849, a: 1}
+    - _BaseColor: {r: 0.8018868, g: 0.70631945, b: 0.54089534, a: 1}
     - _Color: {r: 1, g: 1, b: 1, a: 1}
     - _EmissionColor: {r: 0, g: 0, b: 0, a: 1}
     - _FresnelChannelMask: {r: 1, g: 1, b: 1, a: 0}
     - _FresnelTint: {r: 1, g: 1, b: 1, a: 1}
-    - _LightColor: {r: 0.9056604, g: 0.70269895, b: 0.46564615, a: 1}
-    - _LightDir: {r: 0.3, g: 0.2, b: 0.5, a: 0}
-    - _SSSColor: {r: 0.21244211, g: 0.44065264, b: 0.5849056, a: 1}
+    - _LightColor: {r: 1, g: 1, b: 1, a: 1}
+    - _LightDir: {r: 0.577, g: 0.577, b: 0.577, a: 0}
+    - _SSSColor: {r: 1, g: 0.8, b: 0.7, a: 1}
   m_BuildTextureStacks: []
