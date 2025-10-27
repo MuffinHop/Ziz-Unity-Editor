@@ -21,6 +21,15 @@ public class MatCapBaker : EditorWindow {
     private bool useIBL = true;
     private float exposure = 1.0f;
     private bool useACES = true;
+    private Color sssColor = new Color(1.0f, 0.8f, 0.7f);
+    private float sssStrength = 0.0f;
+    private float sssScale = 0.5f;
+    private bool useFresnel = true;
+    private float fresnelPower = 1.0f;
+    private Color fresnelTint = Color.white;
+    private bool fresnelR = true;
+    private bool fresnelG = true;
+    private bool fresnelB = true;
 
     private const int SIZE = 32;
     // Preview RT size (larger for window preview)
@@ -52,9 +61,6 @@ public class MatCapBaker : EditorWindow {
 
         // Controls to update preview
         GUILayout.BeginHorizontal();
-        if (GUILayout.Button("Update Preview", GUILayout.Width(140))) {
-            UpdatePreview();
-        }
         if (GUILayout.Button("Quick Bake & Save", GUILayout.Width(140))) {
             if (mat == null) EditorUtility.DisplayDialog("MatCap Baker", "Please assign a MatCap material first.", "OK"); else { BakeAndSave(); UpdatePreview(); }
         }
@@ -77,6 +83,26 @@ public class MatCapBaker : EditorWindow {
     useIBL = EditorGUILayout.Toggle("Use IBL", useIBL);
     useACES = EditorGUILayout.Toggle("Use ACES Tonemap", useACES);
     exposure = EditorGUILayout.FloatField("Exposure", exposure);
+
+    EditorGUILayout.Space();
+    GUILayout.Label("Subsurface Scattering", EditorStyles.boldLabel);
+    sssColor = EditorGUILayout.ColorField("SSS Color", sssColor);
+    sssStrength = EditorGUILayout.Slider("SSS Strength", sssStrength, 0f, 1f);
+    sssScale = EditorGUILayout.Slider("SSS Scale", sssScale, 0f, 1f);
+
+        EditorGUILayout.Space();
+        GUILayout.Label("Fresnel", EditorStyles.boldLabel);
+        useFresnel = EditorGUILayout.Toggle("Use Fresnel Diffuse Mod", useFresnel);
+        fresnelPower = EditorGUILayout.Slider("Fresnel Power", fresnelPower, 0.1f, 5.0f);
+    fresnelTint = EditorGUILayout.ColorField("Fresnel Tint", fresnelTint);
+
+    GUILayout.BeginHorizontal();
+    GUILayout.Label("Channel Mask", GUILayout.Width(90));
+    fresnelR = EditorGUILayout.ToggleLeft("R", fresnelR, GUILayout.Width(40));
+    fresnelG = EditorGUILayout.ToggleLeft("G", fresnelG, GUILayout.Width(40));
+    fresnelB = EditorGUILayout.ToggleLeft("B", fresnelB, GUILayout.Width(40));
+    GUILayout.FlexibleSpace();
+    GUILayout.EndHorizontal();
 
         EditorGUILayout.Space();
         if (GUILayout.Button("Bake MatCap (32x32 RGBA16/EXR + PNG preview)")) {
@@ -135,6 +161,14 @@ public class MatCapBaker : EditorWindow {
         if (envCube != null) mat.SetTexture("_EnvCube", envCube);
         mat.SetFloat("_UseIBL", useIBL ? 1f : 0f);
     mat.SetFloat("_UseACES", useACES ? 1f : 0f);
+    mat.SetColor("_SSSColor", sssColor);
+    mat.SetFloat("_SSSStrength", sssStrength);
+    mat.SetFloat("_SSSScale", sssScale);
+    mat.SetFloat("_UseFresnel", useFresnel ? 1f : 0f);
+    mat.SetFloat("_FresnelPower", fresnelPower);
+        mat.SetColor("_FresnelTint", fresnelTint);
+        Vector4 mask = new Vector4(fresnelR ? 1f : 0f, fresnelG ? 1f : 0f, fresnelB ? 1f : 0f, 0f);
+        mat.SetVector("_FresnelChannelMask", mask);
         mat.SetFloat("_Exposure", exposure);
 
         RenderTexture prev = RenderTexture.active;
@@ -165,6 +199,14 @@ public class MatCapBaker : EditorWindow {
     if (envCube != null) mat.SetTexture("_EnvCube", envCube);
     mat.SetFloat("_UseIBL", useIBL ? 1f : 0f);
     mat.SetFloat("_UseACES", useACES ? 1f : 0f);
+    mat.SetColor("_SSSColor", sssColor);
+    mat.SetFloat("_SSSStrength", sssStrength);
+    mat.SetFloat("_SSSScale", sssScale);
+    mat.SetFloat("_UseFresnel", useFresnel ? 1f : 0f);
+    mat.SetFloat("_FresnelPower", fresnelPower);
+    mat.SetColor("_FresnelTint", fresnelTint);
+    Vector4 mask = new Vector4(fresnelR ? 1f : 0f, fresnelG ? 1f : 0f, fresnelB ? 1f : 0f, 0f);
+    mat.SetVector("_FresnelChannelMask", mask);
     mat.SetFloat("_Exposure", exposure);
 
         // Render onto RT
@@ -172,12 +214,12 @@ public class MatCapBaker : EditorWindow {
         Graphics.Blit(null, rt, mat);
         RenderTexture.active = rt;
 
-        // Read pixels into a half float Texture2D
+        // Read pixels into a half float Texture2D for EXR (preserves half floats)
         Texture2D texHalf = new Texture2D(SIZE, SIZE, TextureFormat.RGBAHalf, false, true);
         texHalf.ReadPixels(new Rect(0, 0, SIZE, SIZE), 0, 0);
         texHalf.Apply();
 
-        // Threshold alpha to 1-bit (0 or 1)
+        // Threshold alpha to 1-bit (0 or 1) on the half-float texture's pixel data
         Color[] px = texHalf.GetPixels();
         for (int i = 0; i < px.Length; ++i) {
             px[i].a = px[i].a > 0.5f ? 1.0f : 0.0f;
@@ -190,19 +232,35 @@ public class MatCapBaker : EditorWindow {
         byte[] exrBytes = texHalf.EncodeToEXR(Texture2D.EXRFlags.OutputAsFloat);
         File.WriteAllBytes(exrPath, exrBytes);
 
-        // Also produce an 8-bit PNG preview with alpha thresholded
-        Texture2D tex8 = new Texture2D(SIZE, SIZE, TextureFormat.RGBA32, false);
-        Color[] px8 = new Color[px.Length];
-        for (int i = 0; i < px.Length; ++i) {
-            // Convert from linear half to gamma 8-bit
-            Color c = px[i];
-            Color g = new Color(Mathf.Pow(c.r, 1.0f/2.2f), Mathf.Pow(c.g, 1.0f/2.2f), Mathf.Pow(c.b, 1.0f/2.2f), c.a);
-            px8[i] = g;
+        // Produce an 8-bit PNG preview by rendering the same material into an 8-bit sRGB RT
+        RenderTexture rt8 = new RenderTexture(SIZE, SIZE, 0, RenderTextureFormat.ARGB32);
+        rt8.dimension = UnityEngine.Rendering.TextureDimension.Tex2D;
+        rt8.useMipMap = false;
+        rt8.Create();
+
+        // Render the material into the 8-bit sRGB RT so what we read matches the editor preview
+        Graphics.Blit(null, rt8, mat);
+        RenderTexture.active = rt8;
+
+        Texture2D tex8 = new Texture2D(SIZE, SIZE, TextureFormat.RGBA32, false, false); // not linear (sRGB)
+        tex8.ReadPixels(new Rect(0, 0, SIZE, SIZE), 0, 0);
+        tex8.Apply();
+
+        // Threshold alpha to 1-bit on the 8-bit preview as well
+        Color[] px8 = tex8.GetPixels();
+        for (int i = 0; i < px8.Length; ++i) {
+            px8[i].a = px8[i].a > 0.5f ? 1.0f : 0.0f;
         }
         tex8.SetPixels(px8);
         tex8.Apply();
+
         string pngPath = Path.Combine(absFolder, outputName + ".png");
         File.WriteAllBytes(pngPath, tex8.EncodeToPNG());
+
+        // Cleanup 8-bit RT
+        RenderTexture.active = rt;
+        rt8.Release();
+        DestroyImmediate(rt8);
 
         // Cleanup
         RenderTexture.active = prev;

@@ -6,6 +6,13 @@ Shader "MatCapGenerator/PBR"
         _Roughness ("Roughness", Range(0,1)) = 0.25
         _UseACES ("Use ACES Tonemap", Float) = 0
         _SpecularTint ("Specular Tint", Range(0,1)) = 0.0
+    _SSSColor ("SSS Color", Color) = (1,0.8,0.7,1)
+    _SSSStrength ("SSS Strength", Range(0,1)) = 0.0
+    _SSSScale ("SSS Scale", Range(0,1)) = 0.5
+    _UseFresnel ("Use Fresnel Diffuse Mod", Float) = 1
+    _FresnelPower ("Fresnel Power", Range(0.1,5)) = 1.0
+    _FresnelTint ("Fresnel Tint", Color) = (1,1,1,1)
+    _FresnelChannelMask ("Fresnel Channel Mask", Vector) = (1,1,1,0)
         _LightDir ("Light Direction", Vector) = (0.577, 0.577, 0.577, 0)
         _LightColor ("Light Color", Color) = (1,1,1,1)
         _EnvCube ("Environment Cubemap", Cube) = "_Skybox" {}
@@ -37,6 +44,13 @@ Shader "MatCapGenerator/PBR"
             float _Exposure;
             float _GamutClamp;
             float _UseACES;
+            float4 _SSSColor;
+            float _SSSStrength;
+            float _SSSScale;
+            float _UseFresnel;
+            float _FresnelPower;
+            float4 _FresnelTint;
+            float4 _FresnelChannelMask;
 
             struct v2f {
                 float4 pos : SV_POSITION;
@@ -143,6 +157,31 @@ Shader "MatCapGenerator/PBR"
                 float3 kd = (1.0 - F) * (1.0 - _Metallic);
                 float3 diffuse = kd * albedo / PI;
 
+                // Apply Fresnel-based diffuse falloff (optional)
+                if (_UseFresnel > 0.5) {
+                    // Fresnel factor based on view angle (N·V)
+                    float3 Fview = fresnel_schlick(NdotV, F0);
+
+                    // Channel mask lets user pick which channels of the Fresnel to sample (R/G/B)
+                    float3 mask = _FresnelChannelMask.rgb;
+                    float maskSum = mask.r + mask.g + mask.b;
+                    float fviewMasked;
+                    if (maskSum <= 1e-5) {
+                        // fallback to red channel if mask is zero
+                        fviewMasked = Fview.r;
+                    } else {
+                        fviewMasked = dot(Fview, mask) / maskSum;
+                    }
+
+                    float fmodScalar = pow(saturate(fviewMasked), _FresnelPower);
+
+                    // Apply a colored tint at grazing angles — tint multiplies the scalar
+                    float3 tint = saturate(_FresnelTint.rgb) * fmodScalar;
+
+                    // Reduce diffuse per-channel where tint is strong
+                    diffuse *= (1.0 - tint);
+                }
+
                 // Direct lighting
                 float3 radiance = _LightColor.rgb;
                 float3 Lo = (diffuse + spec) * radiance * NdotL;
@@ -160,6 +199,23 @@ Shader "MatCapGenerator/PBR"
                     ambient += env * diffuse;
                 } else {
                     ambient = float3(0.03, 0.03, 0.03) * albedo; // fallback ambient
+                }
+
+                // --- Subsurface Scattering Approximation ---
+                // Backscattering term: stronger when NdotL is small (light behind surface)
+                float sss_back = 0.0;
+                if (_SSSStrength > 0.001) {
+                    // Use a smooth falloff controlled by SSSScale
+                    float inv = 1.0 - NdotL; // 0 when lit directly, 1 when opposite
+                    float power = 1.0 + _SSSScale * 10.0; // scale to control sharpness
+                    sss_back = pow(saturate(inv), power) * _SSSStrength;
+
+                    // Rim scattering (view-dependent) for thin objects
+                    float sss_rim = pow(saturate(1.0 - NdotV), 2.0 + _SSSScale * 6.0) * (_SSSStrength * 0.5);
+
+                    float3 sss_col = _SSSColor.rgb * (1.0 - _Metallic);
+                    // Add backscatter and rim into ambient diffuse-like term
+                    ambient += sss_col * (sss_back + sss_rim);
                 }
 
                 float3 color = Lo + ambient;
