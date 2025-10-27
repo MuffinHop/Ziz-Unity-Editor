@@ -51,5 +51,9 @@
         "temp/": true,
         "Temp/": true
     },
-    "dotnet.defaultSolution": "Ziz-Unity-Editor.sln"
+    "dotnet.defaultSolution": "Ziz-Unity-Editor.sln",
+    "files.associations": {
+        "stdbool.h": "c",
+        "queue": "c"
+    }
 }
