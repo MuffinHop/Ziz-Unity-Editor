@@ -13,10 +13,18 @@ Shader "MatCapGenerator/PBR"
     _FresnelPower ("Fresnel Power", Range(0.1,5)) = 1.0
     _FresnelTint ("Fresnel Tint", Color) = (1,1,1,1)
     _FresnelChannelMask ("Fresnel Channel Mask", Vector) = (1,1,1,0)
+    _FresnelTintStrength ("Fresnel Tint Strength", Range(0,1)) = 0.5
+    _FresnelTintStart ("Fresnel Tint Start", Range(0,1)) = 0.0
+    _FresnelTintEnd ("Fresnel Tint End", Range(0,1)) = 1.0
         _LightDir ("Light Direction", Vector) = (0.577, 0.577, 0.577, 0)
         _LightColor ("Light Color", Color) = (1,1,1,1)
         _EnvCube ("Environment Cubemap", Cube) = "_Skybox" {}
         _UseIBL ("Use IBL (1 = env sample)", Float) = 1
+        _SpecularIBLIntensity ("Specular IBL Intensity", Float) = 1.0
+        _DiffuseIBLIntensity ("Diffuse IBL Intensity", Float) = 1.0
+    _IBLIntensity ("IBL Intensity", Float) = 1.0
+        _EnvMipScale ("Env Mip Scale", Float) = 8.0
+        _SpecularRoughnessFalloff ("Specular Roughness Falloff", Range(0.1,2.0)) = 0.5
         _Exposure ("Exposure", Float) = 1.0
         _GamutClamp ("Clamp Output", Float) = 1
     }
@@ -41,7 +49,12 @@ Shader "MatCapGenerator/PBR"
             float4 _LightDir;
             float4 _LightColor;
             float _UseIBL;
+            float _SpecularIBLIntensity;
+            float _DiffuseIBLIntensity;
+            float _IBLIntensity;
+            float _SpecularRoughnessFalloff;
             float _Exposure;
+            float _EnvMipScale;
             float _GamutClamp;
             float _UseACES;
             float4 _SSSColor;
@@ -50,6 +63,9 @@ Shader "MatCapGenerator/PBR"
             float _UseFresnel;
             float _FresnelPower;
             float4 _FresnelTint;
+            float _FresnelTintStart;
+            float _FresnelTintEnd;
+            float _FresnelTintStrength;
             float4 _FresnelChannelMask;
 
             struct v2f {
@@ -103,9 +119,11 @@ Shader "MatCapGenerator/PBR"
 
             float3 sampleEnv(float3 R, float roughness)
             {
-                // Simple LOD strategy: sample mip based on roughness
+                // Simpler single-sample LOD: perceptual mapping (rough^2) -> LOD
                 #ifdef UNITY_SAMPLE_TEXCUBE_LOD
-                    return UNITY_SAMPLE_TEXCUBE_LOD(_EnvCube, R, roughness * 8.0).rgb;
+                    float perceptual = roughness * roughness;
+                    float lod = saturate(perceptual) * _EnvMipScale;
+                    return UNITY_SAMPLE_TEXCUBE_LOD(_EnvCube, R, lod).rgb;
                 #else
                     // Fallback: single-sample environment using Unity macro
                     return UNITY_SAMPLE_TEXCUBE(_EnvCube, R).rgb;
@@ -175,10 +193,12 @@ Shader "MatCapGenerator/PBR"
 
                     float fmodScalar = pow(saturate(fviewMasked), _FresnelPower);
 
-                    // Apply a colored tint at grazing angles — tint multiplies the scalar
-                    float3 tint = saturate(_FresnelTint.rgb) * fmodScalar;
+                    // Apply a colored tint at grazing angles — use smoothstep to control how sharply the tint ramps in
+                    float s = smoothstep(_FresnelTintStart, _FresnelTintEnd, fmodScalar);
+                    float tintScalar = s * _FresnelTintStrength;
+                    float3 tint = saturate(_FresnelTint.rgb) * tintScalar;
 
-                    // Reduce diffuse per-channel where tint is strong
+                    // Reduce diffuse per-channel where tint is present
                     diffuse *= (1.0 - tint);
                 }
 
@@ -192,13 +212,29 @@ Shader "MatCapGenerator/PBR"
                     // Get reflection vector
                     float3 R = reflect(-V, N);
                     float3 env = sampleEnv(R, rough);
-                    // Multiply environment by Fresnel for specular IBL contribution
-                    ambient = env * F;
-                    // Add diffuse ambient via irradiance approximation (simple lambertian env)
-                    // For high quality, provide an irradiance cubemap; here use env as a proxy
-                    ambient += env * diffuse;
+
+                    // For specular IBL use Fresnel evaluated with view/reflection (dot V,R)
+                    float3 F_ibl = fresnel_schlick(saturate(dot(V, R)), F0);
+
+                        // Specular contribution from environment (scaled)
+                        // Use a softer falloff controlled by _SpecularRoughnessFalloff so you can tune
+                        // how quickly specular energy drops as roughness increases.
+                        float perceptual = rough * rough;
+                        // softer curve: pow(1 - perceptual, falloff) where falloff in (0.1..2)
+                        float specScale = pow(saturate(1.0 - perceptual), _SpecularRoughnessFalloff);
+                        // Gentle view attenuation: lerp so grazing angles don't abruptly kill reflections
+                        float nv = saturate(NdotV);
+                        float viewAtten = lerp(0.7, 1.0, nv);
+                        float3 specIBL = env * specScale * viewAtten * pow(_SpecularIBLIntensity, 6.0);
+
+                    // Diffuse environment: use a view-independent diffuse term so metallicness
+                    // cleanly controls how much diffuse env is present (metals -> no diffuse).
+                    float3 diffuseIBLTerm = (1.0 - _Metallic) * albedo / PI;
+                    float3 diffIBL = env * diffuseIBLTerm * _DiffuseIBLIntensity;
+
+                    ambient = (specIBL + diffIBL) * _IBLIntensity;
                 } else {
-                    ambient = float3(0.03, 0.03, 0.03) * albedo; // fallback ambient
+                    ambient = float3(0.03, 0.03, 0.03) * albedo * _IBLIntensity; // fallback ambient
                 }
 
                 // --- Subsurface Scattering Approximation ---

@@ -21,6 +21,11 @@ public class MatCapBaker : EditorWindow {
     private bool useIBL = true;
     private float exposure = 1.0f;
     private bool useACES = true;
+    private float iblIntensity = 1.0f;
+    private float specularIBLIntensity = 1.0f;
+    private float diffuseIBLIntensity = 1.0f;
+    private float envMipScale = 8.0f;
+    private float specularRoughnessFalloff = 0.5f;
     private Color sssColor = new Color(1.0f, 0.8f, 0.7f);
     private float sssStrength = 0.0f;
     private float sssScale = 0.5f;
@@ -30,6 +35,9 @@ public class MatCapBaker : EditorWindow {
     private bool fresnelR = true;
     private bool fresnelG = true;
     private bool fresnelB = true;
+    private float fresnelTintStrength = 0.5f;
+    private float fresnelTintStart = 0.0f;
+    private float fresnelTintEnd = 1.0f;
 
     private const int SIZE = 32;
     // Preview RT size (larger for window preview)
@@ -83,6 +91,8 @@ public class MatCapBaker : EditorWindow {
     useIBL = EditorGUILayout.Toggle("Use IBL", useIBL);
     useACES = EditorGUILayout.Toggle("Use ACES Tonemap", useACES);
     exposure = EditorGUILayout.FloatField("Exposure", exposure);
+    iblIntensity = EditorGUILayout.Slider("IBL Intensity", iblIntensity, 0f, 4f);
+    specularRoughnessFalloff = EditorGUILayout.Slider("Specular Roughness Falloff", specularRoughnessFalloff, 0.1f, 2.0f);
 
     EditorGUILayout.Space();
     GUILayout.Label("Subsurface Scattering", EditorStyles.boldLabel);
@@ -95,6 +105,12 @@ public class MatCapBaker : EditorWindow {
         useFresnel = EditorGUILayout.Toggle("Use Fresnel Diffuse Mod", useFresnel);
         fresnelPower = EditorGUILayout.Slider("Fresnel Power", fresnelPower, 0.1f, 5.0f);
     fresnelTint = EditorGUILayout.ColorField("Fresnel Tint", fresnelTint);
+    fresnelTintStrength = EditorGUILayout.Slider("Fresnel Tint Strength", fresnelTintStrength, 0f, 1f);
+    GUILayout.BeginHorizontal();
+    GUILayout.Label("Fresnel Tint Range", GUILayout.Width(120));
+    fresnelTintStart = EditorGUILayout.Slider(fresnelTintStart, 0f, 1f);
+    fresnelTintEnd = EditorGUILayout.Slider(fresnelTintEnd, 0f, 1f);
+    GUILayout.EndHorizontal();
 
     GUILayout.BeginHorizontal();
     GUILayout.Label("Channel Mask", GUILayout.Width(90));
@@ -169,7 +185,21 @@ public class MatCapBaker : EditorWindow {
         mat.SetColor("_FresnelTint", fresnelTint);
         Vector4 mask = new Vector4(fresnelR ? 1f : 0f, fresnelG ? 1f : 0f, fresnelB ? 1f : 0f, 0f);
         mat.SetVector("_FresnelChannelMask", mask);
-        mat.SetFloat("_Exposure", exposure);
+        mat.SetFloat("_SpecularRoughnessFalloff", specularRoughnessFalloff);
+        mat.SetFloat("_FresnelTintStrength", fresnelTintStrength);
+    mat.SetFloat("_FresnelTintStart", fresnelTintStart);
+    mat.SetFloat("_FresnelTintEnd", fresnelTintEnd);
+    mat.SetFloat("_Exposure", exposure);
+    mat.SetFloat("_IBLIntensity", iblIntensity);
+    mat.SetFloat("_SpecularIBLIntensity", specularIBLIntensity);
+    mat.SetFloat("_DiffuseIBLIntensity", diffuseIBLIntensity);
+    mat.SetFloat("_EnvMipScale", envMipScale);
+    mat.SetFloat("_SpecularRoughnessFalloff", specularRoughnessFalloff);
+    mat.SetFloat("_FresnelTintStrength", fresnelTintStrength);
+    mat.SetFloat("_FresnelTintStart", fresnelTintStart);
+    mat.SetFloat("_FresnelTintEnd", fresnelTintEnd);
+    mat.SetFloat("_FresnelTintStart", fresnelTintStart);
+    mat.SetFloat("_FresnelTintEnd", fresnelTintEnd);
 
         RenderTexture prev = RenderTexture.active;
         Graphics.Blit(null, previewRT, mat);
@@ -208,6 +238,7 @@ public class MatCapBaker : EditorWindow {
     Vector4 mask = new Vector4(fresnelR ? 1f : 0f, fresnelG ? 1f : 0f, fresnelB ? 1f : 0f, 0f);
     mat.SetVector("_FresnelChannelMask", mask);
     mat.SetFloat("_Exposure", exposure);
+    mat.SetFloat("_IBLIntensity", iblIntensity);
 
         // Render onto RT
         RenderTexture prev = RenderTexture.active;
