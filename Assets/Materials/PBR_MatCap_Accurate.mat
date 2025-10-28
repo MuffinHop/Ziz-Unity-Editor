@@ -7,8 +7,8 @@ Material:
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_Name: MatCapMat
-  m_Shader: {fileID: 4800000, guid: 893d2b12d5b824ec58ce3acb5b943bc0, type: 3}
+  m_Name: PBR_MatCap_Accurate
+  m_Shader: {fileID: 4800000, guid: 5e7e2e2cea2fd4cdfa1315465ec336f6, type: 3}
   m_Parent: {fileID: 0}
   m_ModifiedSerializedProperties: 0
   m_ValidKeywords: []
@@ -43,12 +43,8 @@ Material:
         m_Texture: {fileID: 0}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
-    - _EnvCube:
-        m_Texture: {fileID: 8900000, guid: a3de28b69b48944438c87668bd722ae7, type: 3}
-        m_Scale: {x: 1, y: 1}
-        m_Offset: {x: 0, y: 0}
     - _MainTex:
-        m_Texture: {fileID: 0}
+        m_Texture: {fileID: 2800000, guid: f5760fc943c5eb643a2291630888f6a1, type: 3}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     - _MetallicGlossMap:
@@ -68,44 +64,28 @@ Material:
     - _BumpScale: 1
     - _Cutoff: 0.5
     - _DetailNormalMapScale: 1
-    - _DiffuseIBLIntensity: 1
     - _DstBlend: 0
-    - _EnvMipScale: 8
-    - _Exposure: 1
-    - _FresnelPower: 1
-    - _FresnelTintEnd: 1
-    - _FresnelTintStart: 0
-    - _FresnelTintStrength: 0.5
-    - _GamutClamp: 1
+    - _Exposure: 1.5
     - _GlossMapScale: 1
     - _Glossiness: 0.5
     - _GlossyReflections: 1
-    - _IBLIntensity: 1
     - _Metallic: 0
     - _Mode: 0
     - _OcclusionStrength: 1
     - _Parallax: 0.02
-    - _Roughness: 0.119
-    - _SSSScale: 0.5
-    - _SSSStrength: 0
     - _SmoothnessTextureChannel: 0
     - _SpecularHighlights: 1
-    - _SpecularIBLIntensity: 1
-    - _SpecularRoughnessFalloff: 0.5
-    - _SpecularTint: 0.083
     - _SrcBlend: 1
     - _UVSec: 0
-    - _UseACES: 1
-    - _UseFresnel: 1
-    - _UseIBL: 1
     - _ZWrite: 1
     m_Colors:
-    - _BaseColor: {r: 0.5, g: 0.5, b: 0.5, a: 1}
     - _Color: {r: 1, g: 1, b: 1, a: 1}
+    - _DirectionalLightColor: {r: 1, g: 1, b: 1, a: 1}
+    - _DirectionalLightDir: {r: -0.03, g: -0.02, b: 1, a: 0}
     - _EmissionColor: {r: 0, g: 0, b: 0, a: 1}
-    - _FresnelChannelMask: {r: 1, g: 1, b: 1, a: 0}
-    - _FresnelTint: {r: 1, g: 1, b: 1, a: 1}
-    - _LightColor: {r: 1, g: 1, b: 1, a: 1}
-    - _LightDir: {r: 0.577, g: 0.577, b: 0.577, a: 0}
-    - _SSSColor: {r: 1, g: 0.8, b: 0.7, a: 1}
+    - _Mouse: {r: 4, g: 4, b: 0, a: 0}
+    - _PointLightColor: {r: 1, g: 0.41176474, b: 0.42272413, a: 1}
+    - _PointLightPos: {r: 1, g: 0.3, b: 0.9, a: 1}
+    - _Resolution: {r: 800, g: 600, b: 0, a: 0}
+    - _ScreenParams: {r: 800, g: 600, b: 0.00125, a: 0.00166667}
   m_BuildTextureStacks: []

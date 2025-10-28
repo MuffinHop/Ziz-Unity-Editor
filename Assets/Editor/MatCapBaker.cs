@@ -17,7 +17,13 @@ public class MatCapBaker : EditorWindow {
     private float roughness = 0.25f;
     private Vector3 lightDir = new Vector3(0.577f, 0.577f, 0.577f);
     private Color lightColor = Color.white;
+    private Vector3 pointLightPos = new Vector3(0f, 0f, 0f);
+    private Color pointLightColor = Color.black;
     private Cubemap envCube = null;
+    private Texture2D channel0 = null;
+    private Texture2D channel1 = null;
+    private Texture2D channel2 = null;
+    private Texture2D channel3 = null;
     private bool useIBL = true;
     private float exposure = 1.0f;
     private bool useACES = true;
@@ -85,9 +91,17 @@ public class MatCapBaker : EditorWindow {
         metallic = EditorGUILayout.Slider("Metallic", metallic, 0f, 1f);
         roughness = EditorGUILayout.Slider("Roughness", roughness, 0f, 1f);
         EditorGUILayout.Space();
-        lightDir = EditorGUILayout.Vector3Field("Light Direction", lightDir);
-        lightColor = EditorGUILayout.ColorField("Light Color", lightColor);
+    lightDir = EditorGUILayout.Vector3Field("Light Direction", lightDir);
+    lightColor = EditorGUILayout.ColorField("Light Color", lightColor);
+    EditorGUILayout.Space();
+    GUILayout.Label("Point Light (optional)", EditorStyles.boldLabel);
+    pointLightPos = EditorGUILayout.Vector3Field("Point Light Position", pointLightPos);
+    pointLightColor = EditorGUILayout.ColorField("Point Light Color", pointLightColor);
     envCube = (Cubemap)EditorGUILayout.ObjectField("Environment Cubemap", envCube, typeof(Cubemap), false);
+    channel0 = (Texture2D)EditorGUILayout.ObjectField("Channel 0 (iChannel0)", channel0, typeof(Texture2D), false);
+    channel1 = (Texture2D)EditorGUILayout.ObjectField("Channel 1 (iChannel1)", channel1, typeof(Texture2D), false);
+    channel2 = (Texture2D)EditorGUILayout.ObjectField("Channel 2 (iChannel2)", channel2, typeof(Texture2D), false);
+    channel3 = (Texture2D)EditorGUILayout.ObjectField("Channel 3 (iChannel3)", channel3, typeof(Texture2D), false);
     useIBL = EditorGUILayout.Toggle("Use IBL", useIBL);
     useACES = EditorGUILayout.Toggle("Use ACES Tonemap", useACES);
     exposure = EditorGUILayout.FloatField("Exposure", exposure);
@@ -174,7 +188,18 @@ public class MatCapBaker : EditorWindow {
         mat.SetFloat("_Roughness", roughness);
         mat.SetVector("_LightDir", new Vector4(lightDir.x, lightDir.y, lightDir.z, 0));
         mat.SetColor("_LightColor", lightColor);
-        if (envCube != null) mat.SetTexture("_EnvCube", envCube);
+    if (envCube != null) mat.SetTexture("_EnvCube", envCube);
+    if (channel0 != null) mat.SetTexture("_Channel0", channel0);
+    if (channel1 != null) mat.SetTexture("_Channel1", channel1);
+    if (channel2 != null) mat.SetTexture("_Channel2", channel2);
+    if (channel3 != null) mat.SetTexture("_Channel3", channel3);
+    // Shadertoy-like inputs
+    mat.SetVector("_iResolution", new Vector4(previewRT.width, previewRT.height, 0, 0));
+    mat.SetFloat("_iTime", (float)EditorApplication.timeSinceStartup);
+    mat.SetVector("_iMouse", Vector4.zero);
+    // pass point light to material (optional)
+    mat.SetVector("_PointLightPos", new Vector4(pointLightPos.x, pointLightPos.y, pointLightPos.z, 0));
+    mat.SetColor("_PointLightColor", pointLightColor);
         mat.SetFloat("_UseIBL", useIBL ? 1f : 0f);
     mat.SetFloat("_UseACES", useACES ? 1f : 0f);
     mat.SetColor("_SSSColor", sssColor);
@@ -227,6 +252,16 @@ public class MatCapBaker : EditorWindow {
     mat.SetVector("_LightDir", new Vector4(lightDir.x, lightDir.y, lightDir.z, 0));
     mat.SetColor("_LightColor", lightColor);
     if (envCube != null) mat.SetTexture("_EnvCube", envCube);
+    if (channel0 != null) mat.SetTexture("_Channel0", channel0);
+    if (channel1 != null) mat.SetTexture("_Channel1", channel1);
+    if (channel2 != null) mat.SetTexture("_Channel2", channel2);
+    if (channel3 != null) mat.SetTexture("_Channel3", channel3);
+    mat.SetVector("_iResolution", new Vector4(SIZE, SIZE, 0, 0));
+    mat.SetFloat("_iTime", (float)EditorApplication.timeSinceStartup);
+    mat.SetVector("_iMouse", Vector4.zero);
+    // pass point light to material for bake as well
+    mat.SetVector("_PointLightPos", new Vector4(pointLightPos.x, pointLightPos.y, pointLightPos.z, 0));
+    mat.SetColor("_PointLightColor", pointLightColor);
     mat.SetFloat("_UseIBL", useIBL ? 1f : 0f);
     mat.SetFloat("_UseACES", useACES ? 1f : 0f);
     mat.SetColor("_SSSColor", sssColor);
