@@ -15,35 +15,20 @@ public class MatCapBaker : EditorWindow {
     private Color baseColor = Color.gray;
     private float metallic = 0.0f;
     private float roughness = 0.25f;
+    private Color emissive = Color.black;
+    private float transparency = 0.0f;
+    private float ior = 1.5f;
+    private Color skyColorTop = new Color(0.7f, 0.8f, 1.0f);
+    private Color skyColorHorizon = new Color(0.35f, 0.4f, 0.5f);
     private Vector3 lightDir = new Vector3(0.577f, 0.577f, 0.577f);
     private Color lightColor = Color.white;
+    private float directionalIntensity = 1.0f;
     private Vector3 pointLightPos = new Vector3(0f, 0f, 0f);
     private Color pointLightColor = Color.black;
-    private Cubemap envCube = null;
-    private Texture2D channel0 = null;
-    private Texture2D channel1 = null;
-    private Texture2D channel2 = null;
-    private Texture2D channel3 = null;
-    private bool useIBL = true;
-    private float exposure = 1.0f;
+    private float pointIntensity = 1.0f;
     private bool useACES = true;
-    private float iblIntensity = 1.0f;
-    private float specularIBLIntensity = 1.0f;
-    private float diffuseIBLIntensity = 1.0f;
-    private float envMipScale = 8.0f;
-    private float specularRoughnessFalloff = 0.5f;
-    private Color sssColor = new Color(1.0f, 0.8f, 0.7f);
-    private float sssStrength = 0.0f;
-    private float sssScale = 0.5f;
-    private bool useFresnel = true;
-    private float fresnelPower = 1.0f;
-    private Color fresnelTint = Color.white;
-    private bool fresnelR = true;
-    private bool fresnelG = true;
-    private bool fresnelB = true;
-    private float fresnelTintStrength = 0.5f;
-    private float fresnelTintStart = 0.0f;
-    private float fresnelTintEnd = 1.0f;
+    private int numSamples = 16;
+    private int numBounces = 4;
 
     private const int SIZE = 32;
     // Preview RT size (larger for window preview)
@@ -90,49 +75,25 @@ public class MatCapBaker : EditorWindow {
         baseColor = EditorGUILayout.ColorField("Base Color", baseColor);
         metallic = EditorGUILayout.Slider("Metallic", metallic, 0f, 1f);
         roughness = EditorGUILayout.Slider("Roughness", roughness, 0f, 1f);
+        emissive = EditorGUILayout.ColorField("Emissive", emissive);
+        transparency = EditorGUILayout.Slider("Transparency", transparency, 0f, 1f);
+        ior = EditorGUILayout.Slider("IOR", ior, 1f, 2f);
+        skyColorTop = EditorGUILayout.ColorField("Sky Color Top", skyColorTop);
+        skyColorHorizon = EditorGUILayout.ColorField("Sky Color Horizon", skyColorHorizon);
         EditorGUILayout.Space();
-    lightDir = EditorGUILayout.Vector3Field("Light Direction", lightDir);
-    lightColor = EditorGUILayout.ColorField("Light Color", lightColor);
-    EditorGUILayout.Space();
-    GUILayout.Label("Point Light (optional)", EditorStyles.boldLabel);
-    pointLightPos = EditorGUILayout.Vector3Field("Point Light Position", pointLightPos);
-    pointLightColor = EditorGUILayout.ColorField("Point Light Color", pointLightColor);
-    envCube = (Cubemap)EditorGUILayout.ObjectField("Environment Cubemap", envCube, typeof(Cubemap), false);
-    channel0 = (Texture2D)EditorGUILayout.ObjectField("Channel 0 (iChannel0)", channel0, typeof(Texture2D), false);
-    channel1 = (Texture2D)EditorGUILayout.ObjectField("Channel 1 (iChannel1)", channel1, typeof(Texture2D), false);
-    channel2 = (Texture2D)EditorGUILayout.ObjectField("Channel 2 (iChannel2)", channel2, typeof(Texture2D), false);
-    channel3 = (Texture2D)EditorGUILayout.ObjectField("Channel 3 (iChannel3)", channel3, typeof(Texture2D), false);
-    useIBL = EditorGUILayout.Toggle("Use IBL", useIBL);
-    useACES = EditorGUILayout.Toggle("Use ACES Tonemap", useACES);
-    exposure = EditorGUILayout.FloatField("Exposure", exposure);
-    iblIntensity = EditorGUILayout.Slider("IBL Intensity", iblIntensity, 0f, 4f);
-    specularRoughnessFalloff = EditorGUILayout.Slider("Specular Roughness Falloff", specularRoughnessFalloff, 0.1f, 2.0f);
-
-    EditorGUILayout.Space();
-    GUILayout.Label("Subsurface Scattering", EditorStyles.boldLabel);
-    sssColor = EditorGUILayout.ColorField("SSS Color", sssColor);
-    sssStrength = EditorGUILayout.Slider("SSS Strength", sssStrength, 0f, 1f);
-    sssScale = EditorGUILayout.Slider("SSS Scale", sssScale, 0f, 1f);
-
+        GUILayout.Label("Directional Light", EditorStyles.boldLabel);
+        lightDir = EditorGUILayout.Vector3Field("Light Direction", lightDir);
+        lightColor = EditorGUILayout.ColorField("Light Color", lightColor);
+        directionalIntensity = EditorGUILayout.FloatField("Light Intensity", directionalIntensity);
         EditorGUILayout.Space();
-        GUILayout.Label("Fresnel", EditorStyles.boldLabel);
-        useFresnel = EditorGUILayout.Toggle("Use Fresnel Diffuse Mod", useFresnel);
-        fresnelPower = EditorGUILayout.Slider("Fresnel Power", fresnelPower, 0.1f, 5.0f);
-    fresnelTint = EditorGUILayout.ColorField("Fresnel Tint", fresnelTint);
-    fresnelTintStrength = EditorGUILayout.Slider("Fresnel Tint Strength", fresnelTintStrength, 0f, 1f);
-    GUILayout.BeginHorizontal();
-    GUILayout.Label("Fresnel Tint Range", GUILayout.Width(120));
-    fresnelTintStart = EditorGUILayout.Slider(fresnelTintStart, 0f, 1f);
-    fresnelTintEnd = EditorGUILayout.Slider(fresnelTintEnd, 0f, 1f);
-    GUILayout.EndHorizontal();
-
-    GUILayout.BeginHorizontal();
-    GUILayout.Label("Channel Mask", GUILayout.Width(90));
-    fresnelR = EditorGUILayout.ToggleLeft("R", fresnelR, GUILayout.Width(40));
-    fresnelG = EditorGUILayout.ToggleLeft("G", fresnelG, GUILayout.Width(40));
-    fresnelB = EditorGUILayout.ToggleLeft("B", fresnelB, GUILayout.Width(40));
-    GUILayout.FlexibleSpace();
-    GUILayout.EndHorizontal();
+        GUILayout.Label("Point Light (optional)", EditorStyles.boldLabel);
+        pointLightPos = EditorGUILayout.Vector3Field("Point Light Position", pointLightPos);
+        pointLightColor = EditorGUILayout.ColorField("Point Light Color", pointLightColor);
+        pointIntensity = EditorGUILayout.FloatField("Point Light Intensity", pointIntensity);
+        useACES = EditorGUILayout.Toggle("Use ACES Tonemap", useACES);
+        EditorGUILayout.Space();
+        numSamples = EditorGUILayout.IntSlider("Num Samples", numSamples, 1, 512);
+        numBounces = EditorGUILayout.IntSlider("Num Bounces", numBounces, 1, 8);
 
         EditorGUILayout.Space();
         if (GUILayout.Button("Bake MatCap (32x32 RGBA16/EXR + PNG preview)")) {
@@ -165,7 +126,7 @@ public class MatCapBaker : EditorWindow {
 
     void CreatePreviewRT() {
         if (previewRT == null) {
-            previewRT = new RenderTexture(PREVIEW_SIZE, PREVIEW_SIZE, 0, RenderTextureFormat.ARGBHalf);
+            previewRT = new RenderTexture(PREVIEW_SIZE, PREVIEW_SIZE, 0, RenderTextureFormat.ARGB32);
             previewRT.Create();
         }
     }
@@ -186,45 +147,20 @@ public class MatCapBaker : EditorWindow {
         mat.SetColor("_BaseColor", baseColor);
         mat.SetFloat("_Metallic", metallic);
         mat.SetFloat("_Roughness", roughness);
+        mat.SetColor("_Emissive", emissive);
+        mat.SetFloat("_Transparency", transparency);
+        mat.SetFloat("_IOR", ior);
+        mat.SetColor("_SkyColorTop", skyColorTop);
+        mat.SetColor("_SkyColorHorizon", skyColorHorizon);
         mat.SetVector("_LightDir", new Vector4(lightDir.x, lightDir.y, lightDir.z, 0));
         mat.SetColor("_LightColor", lightColor);
-    if (envCube != null) mat.SetTexture("_EnvCube", envCube);
-    if (channel0 != null) mat.SetTexture("_Channel0", channel0);
-    if (channel1 != null) mat.SetTexture("_Channel1", channel1);
-    if (channel2 != null) mat.SetTexture("_Channel2", channel2);
-    if (channel3 != null) mat.SetTexture("_Channel3", channel3);
-    // Shadertoy-like inputs
-    mat.SetVector("_iResolution", new Vector4(previewRT.width, previewRT.height, 0, 0));
-    mat.SetFloat("_iTime", (float)EditorApplication.timeSinceStartup);
-    mat.SetVector("_iMouse", Vector4.zero);
-    // pass point light to material (optional)
-    mat.SetVector("_PointLightPos", new Vector4(pointLightPos.x, pointLightPos.y, pointLightPos.z, 0));
-    mat.SetColor("_PointLightColor", pointLightColor);
-        mat.SetFloat("_UseIBL", useIBL ? 1f : 0f);
-    mat.SetFloat("_UseACES", useACES ? 1f : 0f);
-    mat.SetColor("_SSSColor", sssColor);
-    mat.SetFloat("_SSSStrength", sssStrength);
-    mat.SetFloat("_SSSScale", sssScale);
-    mat.SetFloat("_UseFresnel", useFresnel ? 1f : 0f);
-    mat.SetFloat("_FresnelPower", fresnelPower);
-        mat.SetColor("_FresnelTint", fresnelTint);
-        Vector4 mask = new Vector4(fresnelR ? 1f : 0f, fresnelG ? 1f : 0f, fresnelB ? 1f : 0f, 0f);
-        mat.SetVector("_FresnelChannelMask", mask);
-        mat.SetFloat("_SpecularRoughnessFalloff", specularRoughnessFalloff);
-        mat.SetFloat("_FresnelTintStrength", fresnelTintStrength);
-    mat.SetFloat("_FresnelTintStart", fresnelTintStart);
-    mat.SetFloat("_FresnelTintEnd", fresnelTintEnd);
-    mat.SetFloat("_Exposure", exposure);
-    mat.SetFloat("_IBLIntensity", iblIntensity);
-    mat.SetFloat("_SpecularIBLIntensity", specularIBLIntensity);
-    mat.SetFloat("_DiffuseIBLIntensity", diffuseIBLIntensity);
-    mat.SetFloat("_EnvMipScale", envMipScale);
-    mat.SetFloat("_SpecularRoughnessFalloff", specularRoughnessFalloff);
-    mat.SetFloat("_FresnelTintStrength", fresnelTintStrength);
-    mat.SetFloat("_FresnelTintStart", fresnelTintStart);
-    mat.SetFloat("_FresnelTintEnd", fresnelTintEnd);
-    mat.SetFloat("_FresnelTintStart", fresnelTintStart);
-    mat.SetFloat("_FresnelTintEnd", fresnelTintEnd);
+        mat.SetFloat("_DirectionalIntensity", directionalIntensity);
+        mat.SetVector("_PointLightPos", new Vector4(pointLightPos.x, pointLightPos.y, pointLightPos.z, 0));
+        mat.SetColor("_PointLightColor", pointLightColor);
+        mat.SetFloat("_PointIntensity", pointIntensity);
+        mat.SetFloat("_UseACES", useACES ? 1f : 0f);
+        mat.SetInt("_NumSamples", numSamples);
+        mat.SetInt("_NumBounces", numBounces);
 
         RenderTexture prev = RenderTexture.active;
         Graphics.Blit(null, previewRT, mat);
@@ -249,31 +185,20 @@ public class MatCapBaker : EditorWindow {
     mat.SetColor("_BaseColor", baseColor);
     mat.SetFloat("_Metallic", metallic);
     mat.SetFloat("_Roughness", roughness);
+    mat.SetColor("_Emissive", emissive);
+    mat.SetFloat("_Transparency", transparency);
+    mat.SetFloat("_IOR", ior);
+    mat.SetColor("_SkyColorTop", skyColorTop);
+    mat.SetColor("_SkyColorHorizon", skyColorHorizon);
     mat.SetVector("_LightDir", new Vector4(lightDir.x, lightDir.y, lightDir.z, 0));
     mat.SetColor("_LightColor", lightColor);
-    if (envCube != null) mat.SetTexture("_EnvCube", envCube);
-    if (channel0 != null) mat.SetTexture("_Channel0", channel0);
-    if (channel1 != null) mat.SetTexture("_Channel1", channel1);
-    if (channel2 != null) mat.SetTexture("_Channel2", channel2);
-    if (channel3 != null) mat.SetTexture("_Channel3", channel3);
-    mat.SetVector("_iResolution", new Vector4(SIZE, SIZE, 0, 0));
-    mat.SetFloat("_iTime", (float)EditorApplication.timeSinceStartup);
-    mat.SetVector("_iMouse", Vector4.zero);
-    // pass point light to material for bake as well
+    mat.SetFloat("_DirectionalIntensity", directionalIntensity);
     mat.SetVector("_PointLightPos", new Vector4(pointLightPos.x, pointLightPos.y, pointLightPos.z, 0));
     mat.SetColor("_PointLightColor", pointLightColor);
-    mat.SetFloat("_UseIBL", useIBL ? 1f : 0f);
+    mat.SetFloat("_PointIntensity", pointIntensity);
     mat.SetFloat("_UseACES", useACES ? 1f : 0f);
-    mat.SetColor("_SSSColor", sssColor);
-    mat.SetFloat("_SSSStrength", sssStrength);
-    mat.SetFloat("_SSSScale", sssScale);
-    mat.SetFloat("_UseFresnel", useFresnel ? 1f : 0f);
-    mat.SetFloat("_FresnelPower", fresnelPower);
-    mat.SetColor("_FresnelTint", fresnelTint);
-    Vector4 mask = new Vector4(fresnelR ? 1f : 0f, fresnelG ? 1f : 0f, fresnelB ? 1f : 0f, 0f);
-    mat.SetVector("_FresnelChannelMask", mask);
-    mat.SetFloat("_Exposure", exposure);
-    mat.SetFloat("_IBLIntensity", iblIntensity);
+    mat.SetInt("_NumSamples", numSamples);
+    mat.SetInt("_NumBounces", numBounces);
 
         // Render onto RT
         RenderTexture prev = RenderTexture.active;
@@ -313,12 +238,12 @@ public class MatCapBaker : EditorWindow {
         tex8.Apply();
 
         // Threshold alpha to 1-bit on the 8-bit preview as well
-        Color[] px8 = tex8.GetPixels();
-        for (int i = 0; i < px8.Length; ++i) {
-            px8[i].a = px8[i].a > 0.5f ? 1.0f : 0.0f;
-        }
-        tex8.SetPixels(px8);
-        tex8.Apply();
+        // Color[] px8 = tex8.GetPixels();
+        // for (int i = 0; i < px8.Length; ++i) {
+        //     px8[i].a = px8[i].a > 0.5f ? 1.0f : 0.0f;
+        // }
+        // tex8.SetPixels(px8);
+        // tex8.Apply();
 
         string pngPath = Path.Combine(absFolder, outputName + ".png");
         File.WriteAllBytes(pngPath, tex8.EncodeToPNG());
