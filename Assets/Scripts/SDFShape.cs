@@ -188,7 +188,7 @@ public class SDFShape : MonoBehaviour
     /// Important: no timestamps are used — filenames are fully deterministic based on parameters.
     /// This enables reusing previously-generated PNGs when recyclePreviousShapes is enabled.
     /// </summary>
-    public string BuildOutputFilename(int width, int height)
+    public string BuildOutputFilename(int width, int height, bool asRat = false)
     {
         string projectRoot = Application.dataPath.Replace("/Assets", "");
         string generatedDataPath = System.IO.Path.Combine(projectRoot, "GeneratedData");
@@ -201,7 +201,8 @@ public class SDFShape : MonoBehaviour
 
         // Stable filename: include a short hash of the parameters so identical configs reuse the file
         string hash = ComputeParamHash(shapeName + "|" + width + "x" + height + "|" + paramString);
-        string fileName = string.Format("Shape_{0}_{1}x{2}_{3}_{4}.png", shapeName, width, height, paramString, hash);
+        string extension = asRat ? "rat" : "png";
+        string fileName = string.Format("Shape_{0}_{1}x{2}_{3}_{4}.{5}", shapeName, width, height, paramString, hash, extension);
         return System.IO.Path.Combine(generatedDataPath, fileName);
     }
     
@@ -625,102 +626,108 @@ public class SDFShape : MonoBehaviour
             return;
         }
 
-        string outputDir = EditorUtility.OpenFolderPanel("Save RAT Files To", "Assets/GeneratedData", "");
+        string outputDir = System.IO.Path.Combine(GetGeneratedDataPath(), "ShapeAnims");
         if (string.IsNullOrEmpty(outputDir))
         {
             return;
         }
-
-        // Group shapes by texture
-        var shapesByTexture = new Dictionary<string, List<SDFShape>>();
-        foreach (var shape in allShapes)
+        if (!System.IO.Directory.Exists(outputDir))
         {
-            int w = 0, h = 0;
-            switch (shape.emulatedResolution)
-            {
-                case SDFEmulatedResolution.Tex512x512: w = h = 512; break;
-                case SDFEmulatedResolution.Tex256x256: w = h = 256; break;
-                case SDFEmulatedResolution.Tex128x64: w = 128; h = 64; break;
-                default: continue;
-            }
-            string texPath = shape.BuildOutputFilename(w, h);
-            if (!shapesByTexture.ContainsKey(texPath))
-            {
-                shapesByTexture[texPath] = new List<SDFShape>();
-            }
-            shapesByTexture[texPath].Add(shape);
+            System.IO.Directory.CreateDirectory(outputDir);
         }
 
-        int exportedFiles = 0;
-        foreach (var kvp in shapesByTexture)
-        {
-            string texPath = kvp.Key;
-            List<SDFShape> shapesInGroup = kvp.Value;
-
-            string ratFilename = System.IO.Path.GetFileNameWithoutExtension(texPath) + ".rat";
-            string outputPath = System.IO.Path.Combine(outputDir, ratFilename);
-
-            // Use the GLBToRAT converter's logic
-            var converter = new Rat.CommandLine.GLBToRAT();
-            
-            // Collect all vertices and indices from all shapes across all frames
-            List<Vector3[]> allFramesVertices = new List<Vector3[]>();
-            List<ushort> allIndices = new List<ushort>();
-            List<Vector2> allUVs = new List<Vector2>();
-            List<Color> allColors = new List<Color>();
-
-            if (frameTransforms.Keys.Count == 0) continue;
-            
-            int totalFrames = frameTransforms.Keys.Max() + 1;
-            int vertexCount = shapesInGroup.Count * 4;
-
-            for (int i = 0; i < shapesInGroup.Count; i++)
-            {
-                allIndices.AddRange(new ushort[] { (ushort)(i*4), (ushort)(i*4+1), (ushort)(i*4+2), (ushort)(i*4+2), (ushort)(i*4+1), (ushort)(i*4+3) });
-                allUVs.AddRange(new Vector2[] { new Vector2(0,0), new Vector2(1,0), new Vector2(0,1), new Vector2(1,1) });
-                allColors.AddRange(new Color[] { shapesInGroup[i].color, shapesInGroup[i].color, shapesInGroup[i].color, shapesInGroup[i].color });
-            }
-
-            var orderedFrames = frameTransforms.OrderBy(f => f.Key).ToList();
-
-            foreach (var frameKvp in orderedFrames)
-            {
-                var frameData = frameKvp.Value;
-                Vector3[] frameVertices = new Vector3[vertexCount];
-                int currentVertex = 0;
-                foreach (var shape in shapesInGroup)
+        // Group shapes by their deterministic texture filename
+        var shapesByTexture = allShapes
+            .Where(s => s.emulatedResolution != SDFEmulatedResolution.None)
+            .GroupBy(s => {
+                int w = 0, h = 0;
+                switch (s.emulatedResolution)
                 {
-                    if (frameData.TryGetValue(shape, out var transformData))
+                    case SDFEmulatedResolution.Tex512x512: w = h = 512; break;
+                    case SDFEmulatedResolution.Tex256x256: w = h = 256; break;
+                    case SDFEmulatedResolution.Tex128x64: w = 128; h = 64; break;
+                }
+                return s.BuildOutputFilename(w, h);
+            });
+
+        Debug.Log($"Found {shapesByTexture.Count()} unique shape textures to process.");
+
+        foreach (var group in shapesByTexture)
+        {
+            string texturePath = group.Key;
+            SDFShape representative = group.First();
+            Mesh quadMesh = representative.GetComponent<MeshFilter>().sharedMesh;
+
+            Debug.Log($"Processing shape group for texture: {System.IO.Path.GetFileName(texturePath)} ({group.Count()} instances)");
+
+            List<Vector3[]> allFramesVertices = new List<Vector3[]>();
+            int vertexCount = quadMesh.vertexCount;
+
+            // Sort frames by frame number
+            var sortedFrames = frameTransforms.OrderBy(kvp => kvp.Key);
+
+            foreach (var frameData in sortedFrames)
+            {
+                int frame = frameData.Key;
+                var frameShapes = frameData.Value;
+                var vertices = new Vector3[vertexCount];
+
+                // Find the transform for any shape in this group for the current frame
+                TransformData? shapeTransform = null;
+                foreach (SDFShape shape in group)
+                {
+                    if (frameShapes.ContainsKey(shape))
                     {
-                        Matrix4x4 mat = Matrix4x4.TRS(transformData.position, transformData.rotation, transformData.scale);
-                        frameVertices[currentVertex++] = mat.MultiplyPoint3x4(new Vector3(-0.5f, -0.5f, 0));
-                        frameVertices[currentVertex++] = mat.MultiplyPoint3x4(new Vector3( 0.5f, -0.5f, 0));
-                        frameVertices[currentVertex++] = mat.MultiplyPoint3x4(new Vector3(-0.5f,  0.5f, 0));
-                        frameVertices[currentVertex++] = mat.MultiplyPoint3x4(new Vector3( 0.5f,  0.5f, 0));
-                    }
-                    else
-                    {
-                        // Add empty/degenerate vertices if shape is not in this frame
-                        frameVertices[currentVertex++] = Vector3.zero;
-                        frameVertices[currentVertex++] = Vector3.zero;
-                        frameVertices[currentVertex++] = Vector3.zero;
-                        frameVertices[currentVertex++] = Vector3.zero;
+                        shapeTransform = frameShapes[shape];
+                        break;
                     }
                 }
-                allFramesVertices.Add(frameVertices);
+
+                if (shapeTransform.HasValue)
+                {
+                    Matrix4x4 matrix = Matrix4x4.TRS(shapeTransform.Value.position, shapeTransform.Value.rotation, shapeTransform.Value.scale);
+                    for (int i = 0; i < vertexCount; i++)
+                    {
+                        vertices[i] = matrix.MultiplyPoint3x4(quadMesh.vertices[i]);
+                    }
+                }
+                else
+                {
+                    // If no shape from this group was active, use an empty frame
+                    for (int i = 0; i < vertexCount; i++)
+                    {
+                        vertices[i] = Vector3.zero;
+                    }
+                }
+                allFramesVertices.Add(vertices);
             }
 
-            if (allFramesVertices.Count == 0) continue;
+            if (allFramesVertices.Count > 0)
+            {
+                // Use the texture filename (without extension) as the base for the RAT file
+                string baseRatFilename = System.IO.Path.GetFileNameWithoutExtension(texturePath);
+                string ratOutputPath = System.IO.Path.Combine(outputDir, baseRatFilename);
 
-            // Now, we have the data in a format that can be compressed.
-            var compressedAnimation = Rat.CommandLine.GLBToRAT.CompressFrames(allFramesVertices, allIndices.ToArray(), allUVs.ToArray(), allColors.ToArray());
-            
-            // Write the compressed data to a .rat file
-            Rat.CommandLine.GLBToRAT.WriteRatFile(outputPath, compressedAnimation);
-            exportedFiles++;
+                // We pass null for static UVs and colors because for SDFShapes,
+                // the UVs are constant (a simple quad) and colors are handled by the texture.
+                // The compression function will fall back to using the mesh's default UVs.
+                Rat.CompressedAnimation anim = Rat.Tool.CompressFromFrames(allFramesVertices, quadMesh, null, null);
+                
+                if (anim != null)
+                {
+                    // Assign the mesh and texture filenames for the V3 format
+                    anim.mesh_data_filename = $"{baseRatFilename}.ratmesh";
+                    anim.texture_filename = System.IO.Path.GetFileName(texturePath);
+
+                    // Use the size-splitting writer
+                    List<string> createdFiles = Rat.Tool.WriteRatFileWithSizeSplitting(ratOutputPath, anim);
+                    
+                    Debug.Log($"Successfully exported {createdFiles.Count} file(s) for shape group '{baseRatFilename}'.");
+                }
+            }
         }
 
-        EditorUtility.DisplayDialog("Success", $"Exported {exportedFiles} RAT files to {outputDir}", "OK");
+        Debug.Log("=== SDF Shape RAT Export Complete ===");
     }
 
 #endif

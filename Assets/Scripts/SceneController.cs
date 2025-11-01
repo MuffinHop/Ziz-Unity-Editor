@@ -267,7 +267,10 @@ public class SceneController : MonoBehaviour
         Actor[] actors = FindObjectsOfType<Actor>();
         foreach (var actor in actors)
         {
-            trackedComponents.Add(new TrackedComponent(actor, actor.gameObject.name, actor.AnimationData.ratFilePath, ComponentType.Actor, currentId++));
+            // Use the base filename to create a chunk-independent reference.
+            // The C-engine will be responsible for finding all _partXXofYY.rat files.
+            string baseRatPath = actor.BaseFilename + ".rat";
+            trackedComponents.Add(new TrackedComponent(actor, actor.gameObject.name, baseRatPath, ComponentType.Actor, currentId++));
         }
 
         // Find all Level components
@@ -299,10 +302,13 @@ public class SceneController : MonoBehaviour
             // We only need to add one component to the scene file to represent the whole group.
             SDFShape representative = group.First();
             string texturePath = group.Key; // This is the .png path
-            string ratFileName = Path.GetFileNameWithoutExtension(texturePath) + ".rat";
             
-            // We track the texture file; the C engine will derive the .rat name from it.
-            trackedComponents.Add(new TrackedComponent(representative, representative.gameObject.name, texturePath, ComponentType.Shape, currentId++));
+            // Derive the base .rat filename from the texture path.
+            // This creates a chunk-independent reference.
+            string baseRatFilename = Path.ChangeExtension(Path.GetFileName(texturePath), ".rat");
+            
+            // We track the base rat file; the C engine will derive the .ratmesh and texture names from it.
+            trackedComponents.Add(new TrackedComponent(representative, representative.gameObject.name, baseRatFilename, ComponentType.Shape, currentId++));
         }
         
         // Sort by ID to ensure consistent order

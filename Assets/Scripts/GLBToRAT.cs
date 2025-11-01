@@ -3,163 +3,11 @@ using System.IO;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Diagnostics;
+using Rat;
 
 // --- Data Structures ---
-[StructLayout(LayoutKind.Sequential, Pack = 1)]
-public struct VertexU8
-{
-    public byte x, y, z;
-}
-
-[StructLayout(LayoutKind.Sequential, Pack = 1)]
-public struct VertexUV
-{
-    public float u, v;
-}
-
-[StructLayout(LayoutKind.Sequential, Pack = 1)]
-public struct VertexColor
-{
-    public float r, g, b, a;
-}
-
-[StructLayout(LayoutKind.Sequential, Pack = 1)]
-public struct RatHeader
-{
-    public uint magic;
-    public uint num_vertices;
-    public uint num_frames;
-    public uint num_indices;
-    public uint uv_offset;
-    public uint color_offset;
-    public uint indices_offset;
-    public uint bit_widths_offset;
-    public uint delta_offset;
-    public float min_x, min_y, min_z;
-    public float max_x, max_y, max_z;
-    [MarshalAs(UnmanagedType.ByValArray, SizeConst = 4)]
-    public byte[] reserved;
-}
-
-public class CompressedAnimation
-{
-    public uint num_vertices;
-    public uint num_frames;
-    public uint num_indices;
-    public VertexUV[] uvs;
-    public VertexColor[] colors;
-    public ushort[] indices;
-    public uint[] delta_stream;
-    public VertexU8[] first_frame;
-    public float min_x, min_y, min_z;
-    public float max_x, max_y, max_z;
-    public byte[] bit_widths_x;
-    public byte[] bit_widths_y;
-    public byte[] bit_widths_z;
-}
-
-public class DecompressionContext
-{
-    public VertexU8[] current_positions;
-    public uint current_frame;
-}
-
-public class BitstreamWriter
-{
-    private readonly List<uint> _stream = new List<uint>();
-    private uint _currentWord = 0;
-    private int _bitsUsed = 0;
-
-    public void Write(uint value, int bits)
-    {
-        if (bits <= 0 || bits > 32) throw new ArgumentException("Bits must be between 1 and 32.");
-        if (bits < 32) value &= (uint)((1L << bits) - 1);
-
-        int bitsRemainingInWord = 32 - _bitsUsed;
-
-        if (bits < bitsRemainingInWord)
-        {
-            _currentWord |= value << (bitsRemainingInWord - bits);
-            _bitsUsed += bits;
-        }
-        else
-        {
-            _currentWord |= value >> (bits - bitsRemainingInWord);
-            _stream.Add(_currentWord);
-
-            bits -= bitsRemainingInWord;
-            _bitsUsed = bits;
-            _currentWord = (bits > 0) ? value << (32 - bits) : 0;
-        }
-    }
-
-    public void Flush()
-    {
-        if (_bitsUsed > 0)
-        {
-            _stream.Add(_currentWord);
-        }
-        _currentWord = 0;
-        _bitsUsed = 0;
-    }
-
-    public uint[] ToArray() => _stream.ToArray();
-}
-
-public class BitstreamReader
-{
-    private readonly uint[] _stream;
-    private uint _currentWord;
-    private int _bitsReadFromWord = 0;
-    private int _position = 0;
-
-    public BitstreamReader(uint[] stream)
-    {
-        _stream = stream;
-        if (_stream != null && _stream.Length > 0)
-        {
-            _currentWord = _stream[0];
-        }
-    }
-
-    public uint Read(int bits)
-    {
-        if (bits < 0 || bits > 32) throw new ArgumentException("Bits must be between 0 and 32.");
-        if (bits == 0) return 0;
-
-        uint result;
-        int bitsRemainingInWord = 32 - _bitsReadFromWord;
-
-        if (bits <= bitsRemainingInWord)
-        {
-            result = (_currentWord >> (bitsRemainingInWord - bits)) & (uint)((1L << bits) - 1);
-            _bitsReadFromWord += bits;
-        }
-        else
-        {
-            result = (_currentWord & (uint)((1L << bitsRemainingInWord) - 1)) << (bits - bitsRemainingInWord);
-            
-            _position++;
-            if (_position < _stream.Length)
-            {
-                _currentWord = _stream[_position];
-                _bitsReadFromWord = bits - bitsRemainingInWord;
-                result |= _currentWord >> (32 - _bitsReadFromWord);
-            }
-        }
-        
-        if (_bitsReadFromWord == 32)
-        {
-            _position++;
-            if (_position < _stream.Length)
-            {
-                _currentWord = _stream[_position];
-            }
-            _bitsReadFromWord = 0;
-        }
-        return result;
-    }
-}
+// These structs are now defined in the Rat namespace in Rat.cs
+// and are used from there.
 
 namespace Rat.CommandLine
 {
@@ -184,7 +32,7 @@ namespace Rat.CommandLine
             return (byte)bits;
         }
 
-        public static CompressedAnimation CompressFrames(List<UnityEngine.Vector3[]> allFramesVertices, ushort[] allIndices, UnityEngine.Vector2[] allUVs, UnityEngine.Color[] allColors)
+        public static CompressedAnimation CompressFrames(List<UnityEngine.Vector3[]> allFramesVertices, ushort[] allIndices, UnityEngine.Vector2[] allUVs, UnityEngine.Color[] allColors, string textureFilename = null, string meshDataFilename = null)
         {
             if (allFramesVertices == null || allFramesVertices.Count == 0)
             {
@@ -240,7 +88,10 @@ namespace Rat.CommandLine
             for(int i=0; i<numVertices; i++) colors[i] = new VertexColor { r = allColors[i].r, g = allColors[i].g, b = allColors[i].b, a = allColors[i].a };
 
             // 4. Call original CompressAnimation method
-            return CompressAnimation(frames, uvs, colors, allIndices, numVertices, numIndices, numFrames, minX, minY, minZ, maxX, maxY, maxZ);
+            var anim = CompressAnimation(frames, uvs, colors, allIndices, numVertices, numIndices, numFrames, minX, minY, minZ, maxX, maxY, maxZ);
+            anim.texture_filename = textureFilename;
+            anim.mesh_data_filename = meshDataFilename;
+            return anim;
         }
 
         public static CompressedAnimation CompressAnimation(VertexU8[][] frames, VertexUV[] uvs, VertexColor[] colors, ushort[] indices, uint numVertices, uint numIndices, uint numFrames, float minX, float minY, float minZ, float maxX, float maxY, float maxZ)
@@ -310,111 +161,25 @@ namespace Rat.CommandLine
 
         public static void WriteRatFile(string filename, CompressedAnimation anim)
         {
-            using var stream = File.Open(filename, FileMode.Create);
-            WriteRatFile(stream, anim);
-        }
-
-        public static void WriteRatFile(Stream stream, CompressedAnimation anim)
-        {
-            using var writer = new BinaryWriter(stream);
-
-            uint headerSize = (uint)Marshal.SizeOf(typeof(RatHeader));
-            uint uvSize = anim.num_vertices * (uint)Marshal.SizeOf(typeof(VertexUV));
-            uint colorSize = anim.num_vertices * (uint)Marshal.SizeOf(typeof(VertexColor));
-            uint indicesSize = anim.num_indices * sizeof(ushort);
-            uint bitWidthsSize = anim.num_vertices * 3;
-            uint firstFrameSize = anim.num_vertices * (uint)Marshal.SizeOf(typeof(VertexU8));
-
-            var header = new RatHeader
+            string meshDataFilename = null;
+            if (!string.IsNullOrEmpty(anim.mesh_data_filename))
             {
-                magic = 0x31544152, // "RAT1"
-                num_vertices = anim.num_vertices,
-                num_frames = anim.num_frames,
-                num_indices = anim.num_indices,
-                min_x = anim.min_x, max_x = anim.max_x,
-                min_y = anim.min_y, max_y = anim.max_y,
-                min_z = anim.min_z, max_z = anim.max_z,
-                uv_offset = headerSize,
-                color_offset = headerSize + uvSize,
-                indices_offset = headerSize + uvSize + colorSize,
-                bit_widths_offset = headerSize + uvSize + colorSize + indicesSize,
-                delta_offset = headerSize + uvSize + colorSize + indicesSize + bitWidthsSize + firstFrameSize,
-                reserved = new byte[4]
-            };
+                meshDataFilename = Path.GetFileName(anim.mesh_data_filename);
+                string meshPath = Path.Combine(Path.GetDirectoryName(filename), meshDataFilename);
+                using (var meshStream = File.Open(meshPath, FileMode.Create))
+                {
+                    Rat.Tool.WriteRatMeshFile(meshStream, anim);
+                }
+            }
 
-            byte[] headerBytes = new byte[headerSize];
-            IntPtr ptr = Marshal.AllocHGlobal((int)headerSize);
-            Marshal.StructureToPtr(header, ptr, false);
-            Marshal.Copy(ptr, headerBytes, 0, (int)headerSize);
-            Marshal.FreeHGlobal(ptr);
-            writer.Write(headerBytes);
-
-            foreach (var uv in anim.uvs) { writer.Write(uv.u); writer.Write(uv.v); }
-            foreach (var color in anim.colors) { writer.Write(color.r); writer.Write(color.g); writer.Write(color.b); writer.Write(color.a); }
-            if (anim.indices.Length > 0) foreach (var index in anim.indices) writer.Write(index);
-            
-            writer.Write(anim.bit_widths_x);
-            writer.Write(anim.bit_widths_y);
-            writer.Write(anim.bit_widths_z);
-
-            foreach (var v in anim.first_frame) { writer.Write(v.x); writer.Write(v.y); writer.Write(v.z); }
-            if (anim.delta_stream.Length > 0) foreach (var word in anim.delta_stream) writer.Write(word);
+            using var stream = File.Open(filename, FileMode.Create);
+            Rat.Tool.WriteRatFile(stream, anim, meshDataFilename);
         }
 
         public static CompressedAnimation ReadRatFile(string filename)
         {
             using var stream = File.OpenRead(filename);
-            return ReadRatFile(stream);
-        }
-
-        public static CompressedAnimation ReadRatFile(Stream stream)
-        {
-            using var reader = new BinaryReader(stream);
-
-            byte[] headerBytes = reader.ReadBytes(Marshal.SizeOf(typeof(RatHeader)));
-            IntPtr ptr = Marshal.AllocHGlobal(headerBytes.Length);
-            Marshal.Copy(headerBytes, 0, ptr, headerBytes.Length);
-            var header = (RatHeader)Marshal.PtrToStructure(ptr, typeof(RatHeader));
-            Marshal.FreeHGlobal(ptr);
-
-            var anim = new CompressedAnimation
-            {
-                num_vertices = header.num_vertices,
-                num_frames = header.num_frames,
-                num_indices = header.num_indices,
-                min_x = header.min_x, max_x = header.max_x,
-                min_y = header.min_y, max_y = header.max_y,
-                min_z = header.min_z, max_z = header.max_z
-            };
-
-            reader.BaseStream.Seek(header.uv_offset, SeekOrigin.Begin);
-            anim.uvs = new VertexUV[anim.num_vertices];
-            for (int i = 0; i < anim.num_vertices; i++) anim.uvs[i] = new VertexUV { u = reader.ReadSingle(), v = reader.ReadSingle() };
-
-            reader.BaseStream.Seek(header.color_offset, SeekOrigin.Begin);
-            anim.colors = new VertexColor[anim.num_vertices];
-            for (int i = 0; i < anim.num_vertices; i++) anim.colors[i] = new VertexColor { r = reader.ReadSingle(), g = reader.ReadSingle(), b = reader.ReadSingle(), a = reader.ReadSingle() };
-
-            reader.BaseStream.Seek(header.indices_offset, SeekOrigin.Begin);
-            anim.indices = new ushort[anim.num_indices];
-            for (int i = 0; i < anim.num_indices; i++) anim.indices[i] = reader.ReadUInt16();
-
-            reader.BaseStream.Seek(header.bit_widths_offset, SeekOrigin.Begin);
-            anim.bit_widths_x = reader.ReadBytes((int)anim.num_vertices);
-            anim.bit_widths_y = reader.ReadBytes((int)anim.num_vertices);
-            anim.bit_widths_z = reader.ReadBytes((int)anim.num_vertices);
-
-            long firstFrameOffset = header.bit_widths_offset + (anim.num_vertices * 3);
-            reader.BaseStream.Seek(firstFrameOffset, SeekOrigin.Begin);
-            anim.first_frame = new VertexU8[anim.num_vertices];
-            for (int i = 0; i < anim.num_vertices; i++) anim.first_frame[i] = new VertexU8 { x = reader.ReadByte(), y = reader.ReadByte(), z = reader.ReadByte() };
-
-            reader.BaseStream.Seek(header.delta_offset, SeekOrigin.Begin);
-            long deltaStreamByteSize = reader.BaseStream.Length - header.delta_offset;
-            anim.delta_stream = new uint[deltaStreamByteSize / 4];
-            for (int i = 0; i < anim.delta_stream.Length; i++) anim.delta_stream[i] = reader.ReadUInt32();
-
-            return anim;
+            return Rat.Core.ReadRatFile(stream, filename);
         }
 
         public static DecompressionContext CreateDecompressionContext(CompressedAnimation anim)
@@ -564,6 +329,7 @@ namespace Rat.CommandLine
             uint numVertices = 100; // 10x10 grid
             uint numFrames = 60;
             string testFile = "test.rat";
+            string testMeshFile = "test.ratmesh";
 
             Console.WriteLine("1. Simulating GLB data...");
             var (frames, uvs, colors, indices, minX, minY, minZ, maxX, maxY, maxZ) = SimulateGLBData(numVertices, numFrames);
@@ -572,8 +338,10 @@ namespace Rat.CommandLine
 
             Console.WriteLine("2. Compressing animation...");
             var compressed = CompressAnimation(frames, uvs, colors, indices, numVertices, numIndices, numFrames, minX, minY, minZ, maxX, maxY, maxZ);
+            compressed.mesh_data_filename = testMeshFile;
+            compressed.texture_filename = "test_texture.png";
 
-            Console.WriteLine($"3. Writing to '{testFile}'...");
+            Console.WriteLine($"3. Writing to '{testFile}' and '{testMeshFile}'...");
             WriteRatFile(testFile, compressed);
 
             Console.WriteLine($"4. Reading from '{testFile}'...");
@@ -611,7 +379,7 @@ Usage: GLBToRAT <command> [options]
 
 Commands:
   test                  Run a self-contained test with simulated data.
-                        Generates 'test.rat' and verifies its integrity.
+                        Generates 'test.rat' and 'test.ratmesh' and verifies integrity.
   <input> <output>      Convert a GLB file to RAT format. (NOT IMPLEMENTED)
                         This functionality requires a GLB parser.
 
@@ -622,18 +390,22 @@ Description:
 
 Key Features:
 - Lossy vertex animation compression for 3D models.
-- Optimized for real-time rendering and low-memory environments.
+- V3 format separates static mesh data (.ratmesh) from animation data (.rat).
 - Subsequent frames use delta compression with variable bit-width encoding.
 - Constant-time frame access with minimal runtime decompression overhead.
 
-RAT File Structure:
-  [Header]        - Metadata about the animation.
-  [UVs]           - Texture coordinates.
-  [Colors]        - Vertex colors.
-  [Indices]       - Triangle indices.
-  [Bit Widths]    - Per-vertex bit widths for delta compression.
-  [First Frame]   - Uncompressed vertex positions for the first frame.
-  [Delta Stream]  - Compressed deltas for subsequent frames.
+RAT File Structure (V3):
+  .ratmesh file:
+    [Header]        - Metadata about the mesh.
+    [UVs]           - Texture coordinates.
+    [Colors]        - Vertex colors.
+    [Indices]       - Triangle indices.
+    [Texture Path]  - Path to the texture file.
+  .rat file:
+    [Header]        - Metadata, including path to .ratmesh file.
+    [Bit Widths]    - Per-vertex bit widths for delta compression.
+    [First Frame]   - Uncompressed vertex positions for the first frame.
+    [Delta Stream]  - Compressed deltas for subsequent frames.
 
 Warning:
   This library performs lossy compression. Precision is limited to 8-bits
@@ -657,10 +429,41 @@ Warning:
             {
                 RunTest();
             }
-            else if (args.Length == 2)
+            else if (args.Length >= 2)
             {
-                Console.WriteLine("GLB parsing is not implemented in this C# port.");
-                Console.WriteLine("Please use the 'test' command to run a demonstration.");
+                string inputFile = args[0];
+                string outputFile = args[1];
+                string textureFile = (args.Length > 2) ? args[2] : null;
+
+                Console.WriteLine($"Converting {inputFile} to {outputFile}");
+                if(textureFile != null) Console.WriteLine($" with texture {textureFile}");
+
+                // This part is a placeholder for actual GLB parsing
+                Console.WriteLine("GLB parsing is not implemented. Using simulated data for the conversion process.");
+                
+                var (frames, uvs, colors, indices, minX, minY, minZ, maxX, maxY, maxZ) = SimulateGLBData(100, 60);
+                var compressed = CompressFrames(frames.Select(f => 
+                    {
+                        var vectors = new UnityEngine.Vector3[f.Length];
+                        for(int i=0; i<f.Length; i++)
+                        {
+                            vectors[i] = new UnityEngine.Vector3(
+                                minX + (f[i].x / 255.0f) * (maxX - minX),
+                                minY + (f[i].y / 255.0f) * (maxY - minY),
+                                minZ + (f[i].z / 255.0f) * (maxZ - minZ)
+                            );
+                        }
+                        return vectors;
+                    }).ToList(), 
+                    indices, 
+                    uvs.Select(uv => new UnityEngine.Vector2(uv.u, uv.v)).ToArray(), 
+                    colors.Select(c => new UnityEngine.Color(c.r, c.g, c.b, c.a)).ToArray(),
+                    textureFile,
+                    outputFile.Replace(".rat", ".ratmesh")
+                );
+
+                WriteRatFile(outputFile, compressed);
+                Console.WriteLine("Conversion complete (using simulated data).");
             }
             else
             {

@@ -57,9 +57,15 @@ public class RatRecorder : MonoBehaviour
     [Tooltip("The base filename for the saved .rat animation files.")]
     public string baseFilename = "recorded_animation";
 
+    [Tooltip("The filename for the texture associated with this animation (optional).")]
+    public string textureFilename = "";
+
     [Tooltip("Maximum file size in KB before splitting into multiple parts (default: 64KB). Set to 0 for no splitting.")]
     [Range(16, 1024)]
     public int maxFileSizeKB = 64;
+
+    [Tooltip("Preserve the first frame of the animation in its raw, uncompressed format.")]
+    public bool preserveFirstFrame = false;
 
     private bool _isRecording = false;
     private float _recordingStartTime;
@@ -363,12 +369,12 @@ public class RatRecorder : MonoBehaviour
         Rat.CompressedAnimation compressedAnim;
         if (enableCompressionControl)
         {
-            compressedAnim = Rat.Tool.CompressFromFrames(_recordedFrames, _sourceMesh, _capturedUVs, _capturedColors, maxBitsX, maxBitsY, maxBitsZ);
+            compressedAnim = Rat.Tool.CompressFromFrames(_recordedFrames, _sourceMesh, _capturedUVs, _capturedColors, preserveFirstFrame, maxBitsX, maxBitsY, maxBitsZ);
             Debug.Log($"Using compression control with max bits X={maxBitsX}, Y={maxBitsY}, Z={maxBitsZ}");
         }
         else
         {
-            compressedAnim = Rat.Tool.CompressFromFrames(_recordedFrames, _sourceMesh, _capturedUVs, _capturedColors);
+            compressedAnim = Rat.Tool.CompressFromFrames(_recordedFrames, _sourceMesh, _capturedUVs, _capturedColors, preserveFirstFrame);
             Debug.Log($"Using automatic bit width calculation");
         }
         
@@ -407,6 +413,10 @@ public class RatRecorder : MonoBehaviour
         try
         {
             string baseFilePath = Path.Combine(generatedDataPath, baseFilename);
+            string meshDataFilename = $"{baseFilePath}.ratmesh";
+            compressedAnim.mesh_data_filename = meshDataFilename;
+            compressedAnim.texture_filename = textureFilename;
+
             var createdFiles = Rat.Tool.WriteRatFileWithSizeSplitting(baseFilePath, compressedAnim, maxFileSizeKB);
             
             Debug.Log($"RAT file splitting complete! Created {createdFiles.Count} file(s):");
@@ -415,6 +425,8 @@ public class RatRecorder : MonoBehaviour
                 long fileSize = new FileInfo(file).Length;
                 Debug.Log($"  - {Path.GetFileName(file)} ({fileSize} bytes)");
             }
+            long meshFileSize = new FileInfo(meshDataFilename).Length;
+            Debug.Log($"  - {Path.GetFileName(meshDataFilename)} ({meshFileSize} bytes)");
         }
         catch (System.InvalidOperationException ex)
         {
