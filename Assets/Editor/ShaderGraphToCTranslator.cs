@@ -79,6 +79,9 @@ namespace ZizSceneEditor
 
     public class ShaderGraphToCTranslator : EditorWindow
     {
+        // Add execution cost enum at class scope (moved out of method)
+        private enum ExecutionCost { Light, Medium, Heavy, VeryHeavy }
+
         // Helper to infer node output type from node name
         private static string GetNodeOutputType(string nodeName)
         {
@@ -169,9 +172,6 @@ namespace ZizSceneEditor
                 Debug.LogError("Input shader graph file not found: " + inputPath);
                 return;
             }
-
-            // new: execution cost categories
-            enum ExecutionCost { Light, Medium, Heavy, VeryHeavy }
 
             // Replace flat double map with enums + cost table
             Dictionary<string, ExecutionCost> functionCosts = new Dictionary<string, ExecutionCost>

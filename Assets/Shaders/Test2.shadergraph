@@ -73,7 +73,7 @@
     "m_Hidden": false,
     "m_ShaderOutputName": "Alpha",
     "m_StageCapability": 2,
-    "m_Value": 1.0,
+    "m_Value": 1.0399999618530274,
     "m_DefaultValue": 1.0,
     "m_Labels": []
 }
@@ -224,9 +224,9 @@
     "m_ShaderOutputName": "BaseColor",
     "m_StageCapability": 2,
     "m_Value": {
-        "x": 0.5,
-        "y": 0.5,
-        "z": 0.5
+        "x": 1.0,
+        "y": 0.12735849618911744,
+        "z": 0.12735849618911744
     },
     "m_DefaultValue": {
         "x": 0.0,
