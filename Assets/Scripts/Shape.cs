@@ -3,6 +3,7 @@ using UnityEngine;
 /// <summary>
 /// Base class for all procedural shapes translated from gl_shapes.* style API.
 /// Provides a common mesh-generation pipeline & editor-time gizmo drawing.
+/// Now generates .act files for C engine compatibility.
 /// </summary>
 public abstract class Shape : MonoBehaviour
 {
@@ -32,8 +33,16 @@ public abstract class Shape : MonoBehaviour
     [Tooltip("Global multiplier applied to stroke/outline thickness when generating meshes (for quick exaggeration). 1 = no change.")]
     public float debugStrokeMultiplier = 1f;
 
+    [Header("Export Settings")]
+    [Tooltip("Base filename for generated .rat and .act files (auto-generated from transform name if empty).")]
+    public string baseFilename = "";
+    
+    [Tooltip("Automatically generate .rat and .act files when the shape changes.")]
+    public bool autoExportForCEngine = true;
+
     protected Mesh mesh; // cached mesh instance
     static Material _defaultVertexColorMat;
+    private string lastTransformName = "";
 
     /// <summary> Called to (re)build the shape's mesh data. Implement per shape. </summary>
     protected abstract void BuildMesh(Mesh target);
@@ -105,7 +114,118 @@ public abstract class Shape : MonoBehaviour
     protected virtual void OnValidate()
     {
         if (autoRebuild && Application.isEditor && !Application.isPlaying)
+        {
             Rebuild();
+            
+            // Auto-export for C engine if enabled
+            if (autoExportForCEngine)
+            {
+                UpdateBaseFilename();
+                ExportForCEngine();
+            }
+        }
+    }
+    
+    private void UpdateBaseFilename()
+    {
+        // Auto-generate filename from transform name if not set
+        if (string.IsNullOrEmpty(baseFilename) || transform.name != lastTransformName)
+        {
+            string cleanName = System.Text.RegularExpressions.Regex.Replace(transform.name, @"[<>:""/\\|?*]", "_");
+            baseFilename = cleanName;
+            lastTransformName = transform.name;
+        }
+    }
+    
+    /// <summary>
+    /// Export this shape as .rat and .act files for the C engine.
+    /// Creates a single-frame animation with the current mesh state.
+    /// </summary>
+    public void ExportForCEngine()
+    {
+        if (!generateRuntimeMesh || mesh == null) return;
+        
+        UpdateBaseFilename();
+        
+        try
+        {
+            // Get current mesh data
+            var vertices = mesh.vertices;
+            var triangles = mesh.triangles;
+            var uvs = mesh.uv.Length > 0 ? mesh.uv : new Vector2[vertices.Length];
+            var colors = mesh.colors.Length > 0 ? mesh.colors : new Color[vertices.Length];
+            
+            // Fill in defaults if needed
+            if (uvs.Length != vertices.Length)
+            {
+                uvs = new Vector2[vertices.Length];
+                for (int i = 0; i < vertices.Length; i++)
+                {
+                    uvs[i] = new Vector2(0.5f, 0.5f); // Default UV
+                }
+            }
+            
+            if (colors.Length != vertices.Length)
+            {
+                colors = new Color[vertices.Length];
+                for (int i = 0; i < vertices.Length; i++)
+                {
+                    colors[i] = color; // Use shape's base color
+                }
+            }
+            
+            // Convert triangles to ushort indices
+            var indices = new ushort[triangles.Length];
+            for (int i = 0; i < triangles.Length; i++)
+            {
+                indices[i] = (ushort)triangles[i];
+            }
+            
+            // Create single-frame animation
+            var frames = new List<Vector3[]> { vertices };
+            
+            // Generate texture filename
+            string textureFilename = $"assets/{baseFilename}.png";
+            string meshDataFilename = $"{baseFilename}.ratmesh";
+            
+            // Compress animation data
+            var compressed = Rat.CommandLine.GLBToRAT.CompressFrames(
+                frames, indices, uvs, colors, textureFilename, meshDataFilename);
+            
+            // Write RAT file with size splitting
+            string ratFilePath = $"GeneratedData/{baseFilename}.rat";
+            var createdRatFiles = Rat.Tool.WriteRatFileWithSizeSplitting(baseFilename, compressed, 64);
+            
+            // Create Actor animation data for the .act file
+            var actorData = new ActorAnimationData();
+            actorData.framerate = 30.0f; // Static shape, framerate doesn't matter
+            actorData.ratFilePaths.AddRange(createdRatFiles.ConvertAll(path => System.IO.Path.GetFileName(path)));
+            
+            // Create single transform keyframe for the shape
+            var transform = new ActorTransformFloat
+            {
+                position = this.transform.position,
+                rotation = this.transform.eulerAngles,
+                scale = this.transform.localScale,
+                rat_file_index = 0,
+                rat_local_frame = 0
+            };
+            actorData.transforms.Add(transform);
+            
+            // Save .act file
+            string actFilePath = $"GeneratedData/{baseFilename}.act";
+            Actor.SaveActorData(actFilePath, actorData);
+            
+            Debug.Log($"Shape '{name}': Exported to .act file system:");
+            Debug.Log($"  - RAT files: {string.Join(", ", createdRatFiles)}");
+            Debug.Log($"  - ACT file: {actFilePath}");
+            Debug.Log($"  - Texture: {textureFilename}");
+            
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Shape '{name}': Failed to export for C engine: {e.Message}");
+        }
     }
 
     protected virtual void Reset()

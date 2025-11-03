@@ -27,53 +27,23 @@ namespace Rat
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
     public struct RatHeader
     {
-        public uint magic;              // "RAT3" = 0x33544152
+        public uint magic;              // "RAT4" = 0x34544152 (new version without mesh data)
         public uint num_vertices;
         public uint num_frames;
-        public uint num_indices;
         public uint delta_offset;
         public uint bit_widths_offset; // Offset to bit widths array
-        public uint mesh_data_filename_offset; // Offset to mesh data filename
-        public uint mesh_data_filename_length; // Length of mesh data filename
         public float min_x, min_y, min_z;
         public float max_x, max_y, max_z;
         public byte is_first_frame_raw; // 0 = false, 1 = true
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 3)]
-        public byte[] reserved; // Was 8, now 3 to make space for the new offset
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 15)]
+        public byte[] reserved; // Expanded reserved space since we removed mesh references
         public uint raw_first_frame_offset; // Offset to raw first frame data
-    }
-
-    [StructLayout(LayoutKind.Sequential, Pack = 1)]
-    public struct RatMeshHeader
-    {
-        public uint magic;              // "RATM" = 0x4D544152
-        public uint num_vertices;
-        public uint num_indices;
-        public uint uv_offset;
-        public uint color_offset;
-        public uint indices_offset;
-        public uint texture_filename_offset;
-        public uint texture_filename_length;
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
-        public byte[] reserved;
-    }
-
-    public class RatMeshData
-    {
-        public VertexUV[] uvs;
-        public VertexColor[] colors;
-        public ushort[] indices;
-        public string texture_filename = "";
     }
 
     public class CompressedAnimation
     {
         public uint num_vertices;
         public uint num_frames;
-        public uint num_indices;
-        public VertexUV[] uvs;
-        public VertexColor[] colors;
-        public ushort[] indices;
         public uint[] delta_stream;
         public VertexU8[] first_frame;
         public UnityEngine.Vector3[] first_frame_raw; // For uncompressed first frame
@@ -83,8 +53,6 @@ namespace Rat
         public byte[] bit_widths_x;
         public byte[] bit_widths_y;
         public byte[] bit_widths_z;
-        public string texture_filename = ""; // V2: Texture filename for this animation
-        public string mesh_data_filename = ""; // V3: Filename for the .ratmesh file
     }
 
     public class DecompressionContext
@@ -290,7 +258,6 @@ namespace Rat
                 {
                     num_vertices = header.num_vertices,
                     num_frames = header.num_frames,
-                    num_indices = header.num_indices,
                     min_x = header.min_x, max_x = header.max_x,
                     min_y = header.min_y, max_y = header.max_y,
                     min_z = header.min_z, max_z = header.max_z,
@@ -300,27 +267,6 @@ namespace Rat
                     bit_widths_z = new byte[header.num_vertices],
                     isFirstFrameRaw = header.is_first_frame_raw == 1
                 };
-
-                if (header.mesh_data_filename_length > 0)
-                {
-                    reader.BaseStream.Seek(header.mesh_data_filename_offset, SeekOrigin.Begin);
-                    byte[] filenameBytes = reader.ReadBytes((int)header.mesh_data_filename_length);
-                    anim.mesh_data_filename = System.Text.Encoding.UTF8.GetString(filenameBytes);
-
-                    string meshPath = Path.Combine(Path.GetDirectoryName(filepath), anim.mesh_data_filename);
-                    if (File.Exists(meshPath))
-                    {
-                        var meshData = ReadRatMeshFile(meshPath);
-                        anim.uvs = meshData.uvs;
-                        anim.colors = meshData.colors;
-                        anim.indices = meshData.indices;
-                        anim.texture_filename = meshData.texture_filename;
-                    }
-                    else
-                    {
-                        UnityEngine.Debug.LogWarning($"Could not find .ratmesh file: {meshPath}");
-                    }
-                }
 
                 reader.BaseStream.Seek(header.bit_widths_offset, SeekOrigin.Begin);
                 reader.Read(anim.bit_widths_x, 0, anim.bit_widths_x.Length);
@@ -428,78 +374,33 @@ namespace Rat
             return (byte)bits;
         }
 
-        public static void WriteRatFile(Stream stream, CompressedAnimation anim, string meshDataFilename = null)
+        public static void WriteRatFile(Stream stream, CompressedAnimation anim)
         {
-            if (string.IsNullOrEmpty(meshDataFilename) && !string.IsNullOrEmpty(anim.mesh_data_filename))
-            {
-                meshDataFilename = anim.mesh_data_filename;
-            }
-            WriteRatFileV3(stream, anim, meshDataFilename);
+            WriteRatFileV4(stream, anim); // New version without mesh data
         }
         
-        public static void WriteRatMeshFile(Stream stream, CompressedAnimation anim)
-        {
-            using (var writer = new BinaryWriter(stream))
-            {
-                uint headerSize = (uint)Marshal.SizeOf(typeof(RatMeshHeader));
-                uint uvSize = anim.num_vertices * (uint)Marshal.SizeOf(typeof(VertexUV));
-                uint colorSize = anim.num_vertices * (uint)Marshal.SizeOf(typeof(VertexColor));
-                uint indicesSize = anim.num_indices * sizeof(ushort);
-                byte[] textureFilenameBytes = System.Text.Encoding.UTF8.GetBytes(anim.texture_filename ?? "");
-
-                var header = new RatMeshHeader
-                {
-                    magic = 0x4D544152, // "RATM"
-                    num_vertices = anim.num_vertices,
-                    num_indices = anim.num_indices,
-                    uv_offset = headerSize,
-                    color_offset = headerSize + uvSize,
-                    indices_offset = headerSize + uvSize + colorSize,
-                    texture_filename_offset = headerSize + uvSize + colorSize + indicesSize,
-                    texture_filename_length = (uint)textureFilenameBytes.Length,
-                    reserved = new byte[16]
-                };
-
-                byte[] headerBytes = new byte[headerSize];
-                IntPtr ptr = Marshal.AllocHGlobal((int)headerSize);
-                Marshal.StructureToPtr(header, ptr, false);
-                Marshal.Copy(ptr, headerBytes, 0, (int)headerSize);
-                Marshal.FreeHGlobal(ptr);
-                writer.Write(headerBytes);
-
-                foreach (var uv in anim.uvs) { writer.Write(uv.u); writer.Write(uv.v); }
-                foreach (var color in anim.colors) { writer.Write(color.r); writer.Write(color.g); writer.Write(color.b); writer.Write(color.a); }
-                foreach (var index in anim.indices) { writer.Write(index); }
-                if (textureFilenameBytes.Length > 0) writer.Write(textureFilenameBytes);
-            }
-        }
-
-        public static void WriteRatFileV3(Stream stream, CompressedAnimation anim, string meshDataFilename)
+        public static void WriteRatFileV4(Stream stream, CompressedAnimation anim)
         {
             using (var writer = new BinaryWriter(stream))
             {
                 uint headerSize = (uint)Marshal.SizeOf(typeof(RatHeader));
                 uint bitWidthsSize = anim.num_vertices * 3;
                 uint firstFrameSize = anim.num_vertices * (uint)Marshal.SizeOf(typeof(VertexU8));
-                byte[] meshDataFilenameBytes = System.Text.Encoding.UTF8.GetBytes(meshDataFilename);
                 uint rawFirstFrameSize = anim.isFirstFrameRaw ? anim.num_vertices * (uint)Marshal.SizeOf(typeof(UnityEngine.Vector3)) : 0;
 
                 var header = new RatHeader
                 {
-                    magic = 0x33544152, // "RAT3"
+                    magic = 0x34544152, // "RAT4" - version without mesh data
                     num_vertices = anim.num_vertices,
                     num_frames = anim.num_frames,
-                    num_indices = anim.num_indices,
                     min_x = anim.min_x, max_x = anim.max_x,
                     min_y = anim.min_y, max_y = anim.max_y,
                     min_z = anim.min_z, max_z = anim.max_z,
                     bit_widths_offset = headerSize,
-                    mesh_data_filename_offset = headerSize + bitWidthsSize + firstFrameSize,
-                    mesh_data_filename_length = (uint)meshDataFilenameBytes.Length,
-                    raw_first_frame_offset = anim.isFirstFrameRaw ? headerSize + bitWidthsSize + firstFrameSize + (uint)meshDataFilenameBytes.Length : 0,
-                    delta_offset = headerSize + bitWidthsSize + firstFrameSize + (uint)meshDataFilenameBytes.Length + rawFirstFrameSize,
+                    raw_first_frame_offset = anim.isFirstFrameRaw ? headerSize + bitWidthsSize + firstFrameSize : 0,
+                    delta_offset = headerSize + bitWidthsSize + firstFrameSize + rawFirstFrameSize,
                     is_first_frame_raw = (byte)(anim.isFirstFrameRaw ? 1 : 0),
-                    reserved = new byte[3]
+                    reserved = new byte[15]
                 };
 
                 byte[] headerBytes = new byte[headerSize];
@@ -515,8 +416,6 @@ namespace Rat
 
                 foreach (var v in anim.first_frame) { writer.Write(v.x); writer.Write(v.y); writer.Write(v.z); }
                 
-                writer.Write(meshDataFilenameBytes);
-
                 if (anim.isFirstFrameRaw)
                 {
                     foreach (var v in anim.first_frame_raw) { writer.Write(v.x); writer.Write(v.y); writer.Write(v.z); }
@@ -528,46 +427,28 @@ namespace Rat
 
         /// <summary>
         /// Writes RAT files with automatic size-based splitting at 64KB boundaries.
-        /// Throws an exception if the first frame data exceeds 64KB.
+        /// No longer creates .ratmesh files since mesh data is embedded in .act files.
         /// </summary>
-        /// <param name="baseFilename">Base filename without extension</param>
-        /// <param name="anim">Compressed animation data to split and save</param>
-        /// <param name="maxFileSizeKB">Maximum file size in KB before splitting (default: 64KB)</param>
-        /// <returns>List of created filenames</returns>
         public static List<string> WriteRatFileWithSizeSplitting(string baseFilename, CompressedAnimation anim, int maxFileSizeKB = 64)
         {
             const int KB = 1024;
             int maxFileSize = maxFileSizeKB * KB;
             var createdFiles = new List<string>();
 
-            // V3: Write the separate .ratmesh file first, it is not split.
-            string meshDataFilename = $"{baseFilename}.ratmesh";
-            if (!string.IsNullOrEmpty(anim.mesh_data_filename))
-            {
-                using (var meshStream = new FileStream(meshDataFilename, FileMode.Create))
-                {
-                    WriteRatMeshFile(meshStream, anim);
-                }
-                createdFiles.Add(meshDataFilename);
-                UnityEngine.Debug.Log($"Created RAT mesh file: {meshDataFilename}");
-            }
-
-            // Calculate static data sizes for the .rat file (V3 format)
+            // Calculate static data sizes for the .rat file (V4 format - no mesh data)
             uint headerSize = (uint)Marshal.SizeOf(typeof(RatHeader));
             uint bitWidthsSize = anim.num_vertices * 3;
             uint firstFrameSize = anim.num_vertices * (uint)Marshal.SizeOf(typeof(VertexU8));
-            byte[] meshDataFilenameBytes = System.Text.Encoding.UTF8.GetBytes(Path.GetFileName(meshDataFilename));
             uint rawFirstFrameSize = anim.isFirstFrameRaw ? anim.num_vertices * (uint)Marshal.SizeOf(typeof(UnityEngine.Vector3)) : 0;
             
             // Calculate static overhead (everything except delta stream)
-            uint staticOverheadSize = headerSize + bitWidthsSize + firstFrameSize + (uint)meshDataFilenameBytes.Length + rawFirstFrameSize;
+            uint staticOverheadSize = headerSize + bitWidthsSize + firstFrameSize + rawFirstFrameSize;
             
             // Check if the static data alone exceeds the size limit
             if (staticOverheadSize > maxFileSize)
             {
                 throw new System.InvalidOperationException(
                     $"ERROR: Static RAT data ({staticOverheadSize} bytes) exceeds maximum file size ({maxFileSize} bytes)!\n" +
-                    $"Breakdown: Header({headerSize}) + BitWidths({bitWidthsSize}) + FirstFrame({firstFrameSize}) + Filename({meshDataFilenameBytes.Length}) + RawFirstFrame({rawFirstFrameSize})\n" +
                     $"Consider reducing mesh complexity or increasing maxFileSizeKB parameter.");
             }
             
@@ -577,7 +458,7 @@ namespace Rat
                 string filename = $"{baseFilename}.rat";
                 using (var stream = new FileStream(filename, FileMode.Create))
                 {
-                    WriteRatFile(stream, anim, Path.GetFileName(meshDataFilename));
+                    WriteRatFile(stream, anim);
                 }
                 createdFiles.Add(filename);
                 UnityEngine.Debug.Log($"Created single RAT file: {filename} ({new FileInfo(filename).Length} bytes)");
@@ -595,8 +476,7 @@ namespace Rat
             if (maxDeltaWordsPerChunk == 0)
             {
                 throw new System.InvalidOperationException(
-                    $"ERROR: Cannot fit any delta data within {maxFileSizeKB}KB limit! Static overhead is {staticOverheadSize} bytes, " +
-                    $"leaving only {availableSpaceForDeltas} bytes for deltas, but need at least {deltaStreamWordSize} bytes per delta word.");
+                    $"ERROR: Cannot fit any delta data within {maxFileSizeKB}KB limit!");
             }
             
             int numberOfChunks = UnityEngine.Mathf.CeilToInt((float)totalDeltaWords / maxDeltaWordsPerChunk);
@@ -612,8 +492,7 @@ namespace Rat
                 var chunkAnim = new CompressedAnimation
                 {
                     num_vertices = anim.num_vertices,
-                    num_indices = anim.num_indices,
-                    num_frames = anim.num_frames, // This should reflect the frames in the chunk, but the header needs total frames.
+                    num_frames = anim.num_frames,
                     min_x = anim.min_x, max_x = anim.max_x,
                     min_y = anim.min_y, max_y = anim.max_y,
                     min_z = anim.min_z, max_z = anim.max_z,
@@ -622,8 +501,7 @@ namespace Rat
                     isFirstFrameRaw = anim.isFirstFrameRaw,
                     bit_widths_x = anim.bit_widths_x,
                     bit_widths_y = anim.bit_widths_y,
-                    bit_widths_z = anim.bit_widths_z,
-                    mesh_data_filename = Path.GetFileName(meshDataFilename)
+                    bit_widths_z = anim.bit_widths_z
                 };
                 
                 if (chunkDeltaWords > 0)
@@ -642,7 +520,7 @@ namespace Rat
                 
                 using (var stream = new FileStream(filename, FileMode.Create))
                 {
-                    WriteRatFileV3(stream, chunkAnim, chunkAnim.mesh_data_filename);
+                    WriteRatFileV4(stream, chunkAnim);
                 }
                 
                 createdFiles.Add(filename);

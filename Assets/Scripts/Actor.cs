@@ -7,27 +7,36 @@ using System;
 using UnityEngine;
 
 /// <summary>
-/// Binary file header for Actor data files (.act)
+/// Binary file header for Actor data files (.act) - Version 4 with embedded mesh data
 /// Compatible with C-based engines
 /// </summary>
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 public struct ActorHeader
 {
     public uint magic;              // 'ACTR' = 0x52544341
-    public uint version;            // File format version (3 - updated for 16-bit fixed-point)
+    public uint version;            // File format version (4 - includes mesh data)
     public uint num_rat_files;      // Number of RAT files referenced
-    public uint rat_filenames_length; // Total length of all RAT filename strings (including null terminators)
+    public uint rat_filenames_length; // Total length of all RAT filename strings
     public uint num_keyframes;      // Number of transform keyframes
     public float framerate;         // Animation framerate
     public uint transforms_offset;  // Offset to transform data array
     
     // Fixed-point scaling factors for decoding 16-bit values back to floats
-    public float position_min_x, position_min_y, position_min_z;    // Minimum position bounds (model center)
-    public float position_max_x, position_max_y, position_max_z;    // Maximum position bounds (model center)
-    public float scale_min, scale_max;                              // Scale range (assumes uniform min/max)
+    public float position_min_x, position_min_y, position_min_z;
+    public float position_max_x, position_max_y, position_max_z;
+    public float scale_min, scale_max;
     
-    [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
-    public byte[] reserved;         // Reserved for future use
+    // New mesh data offsets and counts
+    public uint num_vertices;       // Number of vertices in mesh
+    public uint num_indices;        // Number of triangle indices
+    public uint mesh_uvs_offset;    // Offset to UV data
+    public uint mesh_colors_offset; // Offset to color data
+    public uint mesh_indices_offset; // Offset to triangle indices
+    public uint texture_filename_offset; // Offset to texture filename
+    public uint texture_filename_length; // Length of texture filename
+    
+    [MarshalAs(UnmanagedType.ByValArray, SizeConst = 8)]
+    public byte[] reserved;         // Reduced reserved space
 }
 
 /// <summary>
@@ -719,6 +728,7 @@ public class Actor : MonoBehaviour
     
     /// <summary>
     /// Saves actor animation data to a binary file with 16-bit fixed-point compression
+    /// and embedded mesh data (Version 4 format)
     /// </summary>
     /// <param name="filePath">Path to save the .act file</param>
     /// <param name="data">Animation data to save</param>
@@ -736,7 +746,6 @@ public class Actor : MonoBehaviour
         float scaleMin = float.MaxValue;
         float scaleMax = float.MinValue;
         
-        // Collect all float values from transforms to find bounds
         foreach (var transform in data.transforms)
         {
             positionMin = Vector3.Min(positionMin, transform.position);
@@ -746,8 +755,8 @@ public class Actor : MonoBehaviour
             scaleMax = Mathf.Max(scaleMax, Mathf.Max(transform.scale.x, Mathf.Max(transform.scale.y, transform.scale.z)));
         }
         
-        Debug.Log($"Transform bounds - Position (model center): [{positionMin}] to [{positionMax}]");
-        Debug.Log($"Scale bounds: [{scaleMin}] to [{scaleMax}]");
+        // Get mesh data - we'll need to extract this from the RAT files or generate default data
+        var meshData = ExtractMeshDataFromRatFiles(data.ratFilePaths);
         
         using (var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write))
         using (var writer = new BinaryWriter(stream))
@@ -759,26 +768,46 @@ public class Actor : MonoBehaviour
                 byte[] pathBytes = Encoding.UTF8.GetBytes(ratPath + '\0');
                 ratFileNameBytes.AddRange(pathBytes);
             }
-            
             byte[] allRatFileNames = ratFileNameBytes.ToArray();
             
-            // Create header (version 3 for 16-bit fixed-point)
+            // Convert texture filename to UTF-8 bytes
+            byte[] textureFilenameBytes = Encoding.UTF8.GetBytes(meshData.textureFilename ?? "");
+            
+            // Calculate offsets
+            uint headerSize = (uint)Marshal.SizeOf<ActorHeader>();
+            uint ratFilenamesOffset = headerSize;
+            uint meshUvsOffset = ratFilenamesOffset + (uint)allRatFileNames.Length;
+            uint meshColorsOffset = meshUvsOffset + (uint)(meshData.uvs.Length * 8); // 2 floats per UV
+            uint meshIndicesOffset = meshColorsOffset + (uint)(meshData.colors.Length * 16); // 4 floats per color
+            uint textureFilenameOffset = meshIndicesOffset + (uint)(meshData.indices.Length * 2); // 2 bytes per index
+            uint transformsOffset = textureFilenameOffset + (uint)textureFilenameBytes.Length;
+            
+            // Create header (version 4 for embedded mesh data)
             var header = new ActorHeader
             {
                 magic = 0x52544341, // 'ACTR'
-                version = 3, // Updated version for 16-bit fixed-point
+                version = 4, // Version 4 with embedded mesh data
                 num_rat_files = (uint)data.ratFilePaths.Count,
                 rat_filenames_length = (uint)allRatFileNames.Length,
                 num_keyframes = (uint)data.transforms.Count,
                 framerate = data.framerate,
-                transforms_offset = (uint)(Marshal.SizeOf<ActorHeader>() + allRatFileNames.Length),
+                transforms_offset = transformsOffset,
                 
-                // Store bounds for fixed-point conversion (position represents model center)
+                // Store bounds for fixed-point conversion
                 position_min_x = positionMin.x, position_min_y = positionMin.y, position_min_z = positionMin.z,
                 position_max_x = positionMax.x, position_max_y = positionMax.y, position_max_z = positionMax.z,
                 scale_min = scaleMin, scale_max = scaleMax,
                 
-                reserved = new byte[16]
+                // Mesh data information
+                num_vertices = (uint)meshData.uvs.Length,
+                num_indices = (uint)meshData.indices.Length,
+                mesh_uvs_offset = meshUvsOffset,
+                mesh_colors_offset = meshColorsOffset,
+                mesh_indices_offset = meshIndicesOffset,
+                texture_filename_offset = textureFilenameOffset,
+                texture_filename_length = (uint)textureFilenameBytes.Length,
+                
+                reserved = new byte[8]
             };
             
             // Write header
@@ -786,6 +815,34 @@ public class Actor : MonoBehaviour
             
             // Write RAT filenames
             writer.Write(allRatFileNames);
+            
+            // Write mesh UV data
+            foreach (var uv in meshData.uvs)
+            {
+                writer.Write(uv.u);
+                writer.Write(uv.v);
+            }
+            
+            // Write mesh color data
+            foreach (var color in meshData.colors)
+            {
+                writer.Write(color.r);
+                writer.Write(color.g);
+                writer.Write(color.b);
+                writer.Write(color.a);
+            }
+            
+            // Write mesh indices
+            foreach (var index in meshData.indices)
+            {
+                writer.Write(index);
+            }
+            
+            // Write texture filename
+            if (textureFilenameBytes.Length > 0)
+            {
+                writer.Write(textureFilenameBytes);
+            }
             
             // Write transform data converted to 16-bit fixed-point
             for (int i = 0; i < data.transforms.Count; i++)
@@ -814,17 +871,52 @@ public class Actor : MonoBehaviour
             }
         }
         
-        string ratFilesList = string.Join(", ", data.ratFilePaths);
-        Debug.Log($"Saved Actor data (16-bit fixed-point): {data.transforms.Count} keyframes at {data.framerate} FPS");
-        Debug.Log($"  - References {data.ratFilePaths.Count} RAT file(s): {ratFilesList}");
-        Debug.Log($"  - Position represents model center for RAT vertex delta calculations");
+        Debug.Log($"Saved Actor data (v4 with embedded mesh): {data.transforms.Count} keyframes, {meshData.uvs.Length} vertices");
+        Debug.Log($"  - Texture: {meshData.textureFilename}");
+        Debug.Log($"  - RAT files: {string.Join(", ", data.ratFilePaths)}");
     }
 
     /// <summary>
-    /// Loads actor animation data from a binary file with 16-bit fixed-point decompression
+    /// Extract mesh data from RAT files for embedding in .act file
     /// </summary>
-    /// <param name="filePath">Path to the .act file</param>
-    /// <returns>Loaded animation data</returns>
+    private static (Rat.VertexUV[] uvs, Rat.VertexColor[] colors, ushort[] indices, string textureFilename) ExtractMeshDataFromRatFiles(List<string> ratFilePaths)
+    {
+        if (ratFilePaths.Count == 0)
+        {
+            // Return default mesh data
+            return (
+                new Rat.VertexUV[] { new Rat.VertexUV { u = 0, v = 0 } },
+                new Rat.VertexColor[] { new Rat.VertexColor { r = 1, g = 1, b = 1, a = 1 } },
+                new ushort[] { 0 },
+                ""
+            );
+        }
+        
+        // Load the first RAT file to extract mesh data
+        string firstRatPath = ratFilePaths[0];
+        
+        try
+        {
+            var animation = Rat.Core.ReadRatFile(firstRatPath);
+            return (animation.uvs, animation.colors, animation.indices, animation.texture_filename);
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogWarning($"Failed to extract mesh data from RAT file '{firstRatPath}': {e.Message}");
+            
+            // Return minimal default data
+            return (
+                new Rat.VertexUV[] { new Rat.VertexUV { u = 0, v = 0 } },
+                new Rat.VertexColor[] { new Rat.VertexColor { r = 1, g = 1, b = 1, a = 1 } },
+                new ushort[] { 0 },
+                ""
+            );
+        }
+    }
+    
+    /// <summary>
+    /// Loads actor animation data from a binary file with mesh data embedded (Version 4)
+    /// </summary>
     public static ActorAnimationData LoadActorData(string filePath)
     {
         using (var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read))
@@ -844,45 +936,31 @@ public class Actor : MonoBehaviour
                 framerate = header.framerate
             };
             
-            // Handle different file versions
-            if (header.version == 1)
+            if (header.version == 4)
             {
-                // Legacy format - single RAT file, float data
-                byte[] ratFileNameBytes = reader.ReadBytes((int)header.rat_filenames_length);
-                string ratFileName = Encoding.UTF8.GetString(ratFileNameBytes).TrimEnd('\0');
-                data.ratFilePaths.Add(ratFileName);
-                
-                Debug.Log($"Loading legacy Actor file (v1) with single RAT file: {ratFileName}");
-                
-                // Read legacy float transforms (this would need different handling)
-                throw new System.Exception("Legacy format v1 not supported with new fixed-point system");
-            }
-            else if (header.version == 2)
-            {
-                // Version 2 format - multiple RAT files, float data
+                // Version 4 format - embedded mesh data, 16-bit fixed-point
                 byte[] allRatFileNameBytes = reader.ReadBytes((int)header.rat_filenames_length);
                 string allRatFileNames = Encoding.UTF8.GetString(allRatFileNameBytes);
                 
                 string[] ratFileNames = allRatFileNames.Split('\0', StringSplitOptions.RemoveEmptyEntries);
                 data.ratFilePaths.AddRange(ratFileNames);
                 
-                Debug.Log($"Loading Actor file (v2) with {data.ratFilePaths.Count} RAT files");
+                Debug.Log($"Loading Actor file (v4) with {data.ratFilePaths.Count} RAT files and embedded mesh data");
                 
-                // Read legacy float transforms (this would need different handling)
-                throw new System.Exception("Legacy format v2 not supported with new fixed-point system");
-            }
-            else if (header.version == 3)
-            {
-                // Version 3 format - multiple RAT files, 16-bit fixed-point data
-                byte[] allRatFileNameBytes = reader.ReadBytes((int)header.rat_filenames_length);
-                string allRatFileNames = Encoding.UTF8.GetString(allRatFileNameBytes);
+                // Skip mesh data for now (UV, colors, indices) - the C engine will read these
+                // We could read them here if needed for Unity-side processing
                 
-                string[] ratFileNames = allRatFileNames.Split('\0', StringSplitOptions.RemoveEmptyEntries);
-                data.ratFilePaths.AddRange(ratFileNames);
-                
-                Debug.Log($"Loading Actor file (v3) with {data.ratFilePaths.Count} RAT files (16-bit fixed-point)");
+                // Read texture filename
+                if (header.texture_filename_length > 0)
+                {
+                    reader.BaseStream.Seek(header.texture_filename_offset, SeekOrigin.Begin);
+                    byte[] textureBytes = reader.ReadBytes((int)header.texture_filename_length);
+                    string textureFilename = Encoding.UTF8.GetString(textureBytes);
+                    Debug.Log($"Texture filename: {textureFilename}");
+                }
                 
                 // Read fixed-point transforms and convert back to float
+                reader.BaseStream.Seek(header.transforms_offset, SeekOrigin.Begin);
                 for (int i = 0; i < header.num_keyframes; i++)
                 {
                     var fixedTransform = ReadStruct<ActorTransform>(reader);
@@ -913,12 +991,9 @@ public class Actor : MonoBehaviour
             }
             else
             {
-                throw new System.Exception($"Unsupported Actor file version: {header.version}");
+                throw new System.Exception($"Unsupported Actor file version: {header.version}. Version 4 required for embedded mesh data.");
             }
             
-            string ratFilesList = string.Join(", ", data.ratFilePaths);
-            Debug.Log($"Loaded Actor data: {data.transforms.Count} keyframes at {data.framerate} FPS");
-            Debug.Log($"  - References: {ratFilesList}");
             return data;
         }
     }
