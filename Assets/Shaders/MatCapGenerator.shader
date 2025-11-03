@@ -8,12 +8,14 @@ Shader "MatCapGenerator/PBR"
         _Transparency ("Transparency", Range(0,1)) = 0.0
         _IOR ("IOR", Range(1,2)) = 1.5
         _UseACES ("Use ACES Tonemap", Float) = 0
-        _NumSamples ("Num Samples", Int) = 16
-        _NumBounces ("Num Bounces", Int) = 4
         _SkyColorTop ("Sky Color Top", Color) = (0.7,0.8,1.0,1)
         _SkyColorHorizon ("Sky Color Horizon", Color) = (0.35,0.4,0.5,1)
-        _PointIntensity ("Point Light Intensity", Float) = 1.0
+        _LightDir ("Directional Light Direction", Vector) = (0.577,0.577,0.577,0)
+        _LightColor ("Directional Light Color", Color) = (1,1,1,1)
         _DirectionalIntensity ("Directional Light Intensity", Float) = 1.0
+        _PointLightPos ("Point Light Position", Vector) = (0,0,0,0)
+        _PointLightColor ("Point Light Color", Color) = (0,0,0,1)
+        _PointIntensity ("Point Light Intensity", Float) = 1.0
     }
 
     SubShader {
@@ -28,10 +30,53 @@ Shader "MatCapGenerator/PBR"
 
             #include "UnityCG.cginc"
 
+            //-----------------------------------------------------
+            // Constants and Variables
+            //-----------------------------------------------------
+            
             static const float PI = 3.14159265359;
             static const float PHI = 1.61803398875;
+            static const float eps = 0.00001;
+            
+            #define LIGHTPATHLENGTH 2
+            #define EYEPATHLENGTH 3
 
-            // Blue noise functions from Shadertoy wllSR4
+            float4 _BaseColor;
+            float _Metallic;
+            float _Roughness;
+            float4 _Emissive;
+            float _Transparency;
+            float _IOR;
+            float4 _SkyColorTop;
+            float4 _SkyColorHorizon;
+            float _UseACES;
+            float4 _PointLightPos;
+            float4 _PointLightColor;
+            float4 _LightDir;
+            float4 _LightColor;
+            float _PointIntensity;
+            float _DirectionalIntensity;
+
+            // keep these hardcoded for now
+            #define _NumSamples 64
+            #define _NumBounces 2
+
+            //-----------------------------------------------------
+            // Noise and Random Functions
+            //-----------------------------------------------------
+            
+            float hash1(inout float seed) {
+                return frac(sin(seed += 0.1)*43758.5453123);
+            }
+
+            float2 hash2(inout float seed) {
+                return frac(sin(float2(seed+=0.1,seed+=0.1))*float2(43758.5453123,22578.1459123));
+            }
+
+            float3 hash3(inout float seed) {
+                return frac(sin(float3(seed+=0.1,seed+=0.1,seed+=0.1))*float3(43758.5453123,22578.1459123,19642.3490423));
+            }
+
             float gold_noise(float2 xy, float seed) {
                 return frac(tan(distance(xy * PHI, xy) * seed) * xy.x);
             }
@@ -45,25 +90,10 @@ Shader "MatCapGenerator/PBR"
                 return noise / 4.0;
             }
 
-            float4 _BaseColor;
-            float _Metallic;
-            float _Roughness;
-            float4 _Emissive;
-            float _Transparency;
-            float _IOR;
-            float4 _SkyColorTop;
-            float4 _SkyColorHorizon;
-            float _UseACES;
-            int _NumSamples;
-            int _NumBounces;
-            float4 _PointLightPos;
-            float4 _PointLightColor;
-            float4 _LightDir;
-            float4 _LightColor;
-            float _PointIntensity;
-            float _DirectionalIntensity;
-
-            // Material struct
+            //-----------------------------------------------------
+            // Material System
+            //-----------------------------------------------------
+            
             struct Material {
                 float3 albedo;
                 float metallic;
@@ -73,7 +103,6 @@ Shader "MatCapGenerator/PBR"
                 float ior;
             };
 
-            // getMaterial function
             Material getMaterial(float3 p, inout float3 n) {
                 Material mat;
                 mat.albedo = _BaseColor.rgb;
@@ -85,9 +114,45 @@ Shader "MatCapGenerator/PBR"
                 return mat;
             }
 
-            // Disney BRDF functions
+            //-----------------------------------------------------
+            // Sampling Functions
+            //-----------------------------------------------------
+
+            float3 cosWeightedRandomHemisphereDirection(float3 n, inout float seed) {
+                float2 r = hash2(seed);
+                
+                float3 uu = normalize(cross(n, float3(0.0,1.0,1.0)));
+                float3 vv = cross(uu, n);
+                
+                float ra = sqrt(r.y);
+                float rx = ra*cos(6.2831*r.x); 
+                float ry = ra*sin(6.2831*r.x);
+                float rz = sqrt(1.0-r.y);
+                float3 rr = float3(rx*uu + ry*vv + rz*n);
+                
+                return normalize(rr);
+            }
+
+            float3 randomSphereDirection(inout float seed) {
+                float2 h = hash2(seed) * float2(2.,6.28318530718) - float2(1,0);
+                float phi = h.y;
+                return float3(sqrt(1.-h.x*h.x)*float2(sin(phi),cos(phi)),h.x);
+            }
+
+            float3 sampleLight(float3 ro, inout float seed) {
+                float3 n = randomSphereDirection(seed) * 0.5; // Light sphere radius
+                return _PointLightPos.xyz + n;
+            }
+
+            //-----------------------------------------------------
+            // Disney BRDF Functions
+            //-----------------------------------------------------
             float F_Schlick(float f0, float f90, float u) {
                 return f0 + (f90 - f0) * pow(1. - u, 5.);
+            }
+
+            float3 F_Schlick(float cosTheta, float3 F0) {
+                return F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
             }
 
             float3 evalDisneyDiffuse(Material mat, float NoL, float NoV, float LoH, float roughness) {
@@ -103,12 +168,27 @@ Shader "MatCapGenerator/PBR"
                 return (a - 1.) / (PI * log(a) * t);
             }
 
+            float D_GGX(float NdotH, float roughness) {
+                float a = roughness * roughness;
+                float a2 = a * a;
+                float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
+                return a2 / (PI * denom * denom);
+            }
+
             float GeometryTerm(float NoL, float NoV, float roughness) {
                 float a = roughness;
                 float a2 = a * a;
                 float lambdaV = NoV * sqrt((-NoV * a2 + NoV) * NoV + a2);
                 float lambdaL = NoL * sqrt((-NoL * a2 + NoL) * NoL + a2);
                 return 0.5 / (lambdaV + lambdaL + 1e-6);
+            }
+
+            float G_SchlickGGX(float NdotV, float k) {
+                return NdotV / (NdotV * (1.0 - k) + k);
+            }
+
+            float G_Smith(float NdotV, float NdotL, float k) {
+                return G_SchlickGGX(NdotV, k) * G_SchlickGGX(NdotL, k);
             }
 
             float3 evalDisneySpecular(Material mat, float3 F, float NoH, float NoV, float NoL) {
@@ -118,6 +198,10 @@ Shader "MatCapGenerator/PBR"
                 float3 spec = D * F * G / (4. * NoL * NoV);
                 return spec;
             }
+
+            //-----------------------------------------------------
+            // Vertex Shader and Utilities
+            //-----------------------------------------------------
 
             struct v2f {
                 float4 pos : SV_POSITION;
@@ -131,7 +215,6 @@ Shader "MatCapGenerator/PBR"
                 return o;
             }
 
-            // ACES RRT+ODT approximation (Narkowicz fit)
             float3 RRTAndODTFit(float3 v) {
                 float3 a = v * (v + 0.0245786) - 0.000090537;
                 float3 b = v * (0.983729 * v + 0.4329510) + 0.238081;
@@ -149,7 +232,10 @@ Shader "MatCapGenerator/PBR"
                 return lerp(colorHorizon, colorTop, fBlend);
             }
 
-            // Helper functions for path tracing
+            //-----------------------------------------------------
+            // Intersection and Scene Functions
+            //-----------------------------------------------------
+            
             float intersectSphere(float3 ro, float3 rd, float3 center, float radius) {
                 float3 oc = ro - center;
                 float a = dot(rd, rd);
@@ -162,217 +248,368 @@ Shader "MatCapGenerator/PBR"
                 return -1.0;
             }
 
-            float random(float seed, float2 uv, inout float noiseIndex) {
-                // Use blue noise for better distribution
-                float3 bn = blueNoise(uv * 100.0, seed + noiseIndex);
-                noiseIndex += 1.0;
-                return bn.x;
+            bool intersectShadow(float3 ro, float3 rd, float dist) {
+                float t = intersectSphere(ro, rd, float3(0.0, 0.0, 0.0), 1.0);
+                return t > eps && t < dist;
             }
 
-            void basis(float3 n, out float3 t, out float3 b) {
-                float3 up = abs(n.z) < 0.999 ? float3(0, 0, 1) : float3(1, 0, 0);
-                t = normalize(cross(up, n));
-                b = cross(n, t);
+            //-----------------------------------------------------
+            // Path Tracing System
+            //-----------------------------------------------------
+
+            // Enhanced BRDF ray generation with proper transparency handling
+            float3 getBRDFRay(float3 n, float3 rd, Material mat, inout bool specularBounce, inout float seed) {
+                specularBounce = false;
+                
+                // For transparent materials, handle in the main path tracing loop
+                if (mat.transparency > 0.0) {
+                    specularBounce = true;
+                    return rd; // Will be handled in traceEyePath
+                }
+                
+                float3 r = cosWeightedRandomHemisphereDirection(n, seed);
+                
+                // Check if material is specular (metallic or very smooth)
+                if (mat.metallic > 0.5 || mat.roughness < 0.1) {
+                    specularBounce = true;
+                    
+                    float ndotr = dot(rd, n);
+                    
+                    // Simple reflection for metallic materials
+                    if (mat.metallic > 0.8) {
+                        return reflect(rd, n);
+                    }
+                    
+                    // Fresnel reflection for dielectric materials
+                    float r0 = (1.0 - mat.ior) / (1.0 + mat.ior);
+                    r0 *= r0;
+                    float fresnel = r0 + (1.0 - r0) * pow(1.0 - abs(ndotr), 5.0);
+                    
+                    if (hash1(seed) < fresnel) {
+                        return reflect(rd, n);
+                    } else {
+                        // Mix with diffuse for rough dielectrics
+                        return normalize(lerp(r, reflect(rd, n), 1.0 - mat.roughness));
+                    }
+                } else {
+                    // Diffuse material
+                    return r;
+                }
             }
 
-            float3 randomHemisphereDirection(float3 nor, inout float seed, float2 uv, inout float noiseIndex) {
-                float u = random(seed, uv, noiseIndex);
-                seed += 1.0;
-                float v = random(seed, uv, noiseIndex);
-                seed += 1.0;
-                float theta = 2.0 * PI * u;
-                float phi = acos(sqrt(v)); // Cosine-weighted
-                float3 dir = float3(sin(phi) * cos(theta), sin(phi) * sin(theta), cos(phi));
-                float3 t, b;
-                basis(nor, t, b);
-                return t * dir.x + b * dir.y + nor * dir.z;
+            struct LightPathNode {
+                float3 color;
+                float3 position;
+                float3 normal;
+            };
+
+            LightPathNode lpNodes[LIGHTPATHLENGTH];
+
+            float getWeightForPath(int e, int l) {
+                return float(e + l + 2);
             }
 
-            // BRDF functions
-            float D_GGX(float NdotH, float roughness) {
-                float a = roughness * roughness;
-                float a2 = a * a;
-                float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
-                return a2 / (PI * denom * denom);
+            void constructLightPath(inout float seed) {
+                float3 ro = randomSphereDirection(seed);
+                float3 rd = cosWeightedRandomHemisphereDirection(ro, seed);
+                ro = _PointLightPos.xyz - ro * 0.5; // Light sphere radius
+                float3 color = _PointLightColor.rgb * _PointIntensity;
+
+                for (int i = 0; i < LIGHTPATHLENGTH; i++) {
+                    lpNodes[i].position = lpNodes[i].color = lpNodes[i].normal = float3(0.0, 0.0, 0.0);
+                }
+
+                bool specularBounce;
+                
+                for (int i = 0; i < LIGHTPATHLENGTH; i++) {
+                    float t = intersectSphere(ro, rd, float3(0.0, 0.0, 0.0), 1.0);
+                    if (t > 0.0) {
+                        float3 pos = ro + rd * t;
+                        float3 nor = normalize(pos);
+                        ro = pos;
+                        color *= _BaseColor.rgb;
+
+                        lpNodes[i].position = pos;
+                        Material mat = getMaterial(pos, nor);
+                        if (mat.metallic < 0.5) lpNodes[i].color = color;
+                        lpNodes[i].normal = nor;
+
+                        rd = getBRDFRay(nor, rd, mat, specularBounce, seed);
+                    } else break;
+                }
             }
 
-            float G_SchlickGGX(float NdotV, float k) {
-                return NdotV / (NdotV * (1.0 - k) + k);
+            // Enhanced eye path tracing with transparency support
+            float3 traceEyePath(float3 ro, float3 rd, bool bidirectTrace, inout float seed, float2 uv) {
+                float3 tcol = float3(0.0, 0.0, 0.0);
+                float3 fcol = float3(1.0, 1.0, 1.0);
+                
+                bool specularBounce = false; // Start with diffuse for proper light sampling
+                int jdiff = 0;
+                bool inside = false; // Track if we're inside a transparent object
+                
+                for (int j = 0; j < EYEPATHLENGTH; ++j) {
+                    float t = intersectSphere(ro, rd, float3(0.0, 0.0, 0.0), 1.0);
+                    if (t < 0.0) {
+                        return tcol + fcol * GetSkyGradient(rd);
+                    }
+                    
+                    float3 pos = ro + t * rd;
+                    float3 normal = normalize(pos);
+                    Material mat = getMaterial(pos, normal);
+                    
+                    // Add emissive contribution
+                    tcol += fcol * mat.emissive;
+                    
+                    // Add direct lighting contribution for non-transparent materials
+                    if (mat.transparency <= 0.0) {
+                        // Sample directional light with proper BRDF
+                        if (_DirectionalIntensity > 0.0) {
+                            float3 dirLightDir = normalize(-_LightDir.xyz);
+                            if (!intersectShadow(pos, dirLightDir, 1000.0)) {
+                                float NdotL = saturate(dot(dirLightDir, normal));
+                                if (NdotL > 0.0) {
+                                    float3 viewDir = normalize(-rd);
+                                    float3 halfDir = normalize(dirLightDir + viewDir);
+                                    float NdotH = saturate(dot(normal, halfDir));
+                                    float NdotV = saturate(dot(normal, viewDir));
+                                    float HdotL = saturate(dot(halfDir, dirLightDir));
+                                    
+                                    // Fresnel for dielectrics
+                                    float3 F0 = lerp(float3(0.001, 0.001, 0.001), mat.albedo, mat.metallic);
+                                    float3 F = F_Schlick(HdotL, F0);
+                                    
+                                    // Diffuse contribution
+                                    float3 kD = (1.0 - F) * (1.0 - mat.metallic);
+                                    float3 diffuse = kD * mat.albedo / PI;
+                                    
+                                    // Specular contribution (simplified)
+                                    float roughness = mat.roughness * mat.roughness;
+                                    float D = D_GGX(NdotH, roughness);
+                                    float G = GeometryTerm(NdotL, NdotV, roughness);
+                                    float3 specular = (D * F * G) / max(4.0 * NdotL * NdotV, 0.001);
+                                    
+                                    float3 dirLightContrib = (diffuse + specular) * _LightColor.rgb * _DirectionalIntensity * NdotL;
+                                    tcol += fcol * dirLightContrib;
+                                }
+                            }
+                        }
+                        
+                        // Sample point light with proper BRDF and attenuation
+                        if (_PointIntensity > 0.0 && length(_PointLightPos.xyz) > 0.1) {
+                            float3 ld = _PointLightPos.xyz - pos;
+                            float3 nld = normalize(ld);
+                            float dist = length(ld);
+                            
+                            if (!intersectShadow(pos, nld, dist)) {
+                                float NdotL = saturate(dot(nld, normal));
+                                if (NdotL > 0.0) {
+                                    float3 viewDir = normalize(-rd);
+                                    float3 halfDir = normalize(nld + viewDir);
+                                    float NdotH = saturate(dot(normal, halfDir));
+                                    float NdotV = saturate(dot(normal, viewDir));
+                                    float HdotL = saturate(dot(halfDir, nld));
+                                    
+                                    // Fresnel for dielectrics
+                                    float3 F0 = lerp(float3(0.001, 0.001, 0.001), mat.albedo, mat.metallic);
+                                    float3 F = F_Schlick(HdotL, F0);
+                                    
+                                    // Diffuse contribution
+                                    float3 kD = (1.0 - F) * (1.0 - mat.metallic);
+                                    float3 diffuse = kD * mat.albedo / PI;
+                                    
+                                    // Specular contribution (simplified)
+                                    float roughness = mat.roughness * mat.roughness;
+                                    float D = D_GGX(NdotH, roughness);
+                                    float G = GeometryTerm(NdotL, NdotV, roughness);
+                                    float3 specular = (D * F * G) / max(4.0 * NdotL * NdotV, 0.001);
+                                    
+                                    // Distance attenuation
+                                    float attenuation = 1.0 / (1.0 + 0.1 * dist + 0.01 * dist * dist);
+                                    float3 pointLightContrib = (diffuse + specular) * _PointLightColor.rgb * _PointIntensity * attenuation * NdotL;
+                                    tcol += fcol * pointLightContrib;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Handle transparency/refraction
+                    if (mat.transparency > 0.0) {
+                        float ndotr = dot(rd, normal);
+                        bool entering = ndotr < 0.0;
+                        
+                        // Flip normal if we're exiting the material
+                        if (!entering) {
+                            normal = -normal;
+                            ndotr = -ndotr;
+                        }
+                        
+                        float eta = entering ? (1.0 / mat.ior) : mat.ior;
+                        
+                        // Fresnel calculation
+                        float r0 = (1.0 - mat.ior) / (1.0 + mat.ior);
+                        r0 *= r0;
+                        float fresnel = r0 + (1.0 - r0) * pow(1.0 - abs(ndotr), 5.0);
+                        
+                        // Decide between reflection and refraction
+                        if (hash1(seed) < fresnel) {
+                            // Reflection
+                            rd = reflect(rd, normal);
+                            specularBounce = true;
+                        } else {
+                            // Refraction
+                            float3 refracted = refract(rd, normal, eta);
+                            if (length(refracted) > 0.0) {
+                                rd = refracted;
+                                inside = entering ? true : false;
+                                specularBounce = true;
+                            } else {
+                                // Total internal reflection
+                                rd = reflect(rd, normal);
+                                specularBounce = true;
+                            }
+                        }
+                        
+                        ro = pos + normal * eps * (entering ? -1.0 : 1.0);
+                        continue; // Skip the rest of the loop for transparent materials
+                    }
+                    
+                    // Direct light sampling (bidirectional technique) - DISABLED FOR DEBUGGING
+                    /*
+                    if (bidirectTrace) {
+                        // Sample point light if it's enabled (intensity > 0)
+                        if (_PointIntensity > 0.0) {
+                            float3 ld = sampleLight(pos, seed) - pos;
+                            float3 nld = normalize(ld);
+                            
+                            if (!intersectShadow(pos, nld, length(ld))) {
+                                float lightRadius = 0.5;
+                                float cos_a_max = sqrt(1.0 - clamp(lightRadius * lightRadius / dot(_PointLightPos.xyz - pos, _PointLightPos.xyz - pos), 0.0, 1.0));
+                                float weight = 2.0 * (1.0 - cos_a_max);
+                                
+                                float NdotL = saturate(dot(nld, normal));
+                                float3 lightContrib = fcol * _PointLightColor.rgb * _PointIntensity * weight * NdotL;
+                                
+                                // Apply material response
+                                if (mat.metallic > 0.5) {
+                                    // Metallic materials use base color as specular color
+                                    lightContrib *= mat.albedo;
+                                } else {
+                                    // Dielectric materials use base color as diffuse albedo
+                                    lightContrib *= mat.albedo;
+                                }
+                                
+                                tcol += lightContrib / getWeightForPath(jdiff, -1);
+                            }
+                        }
+                        
+                        // Sample directional light if it's enabled (intensity > 0)
+                        if (_DirectionalIntensity > 0.0) {
+                            float3 dirLightDir = normalize(-_LightDir.xyz);
+                            if (!intersectShadow(pos, dirLightDir, 1000.0)) {
+                                float NdotL = saturate(dot(dirLightDir, normal));
+                                if (NdotL > 0.0) {
+                                    float3 dirLightContrib = fcol * _LightColor.rgb * _DirectionalIntensity * NdotL;
+                                    
+                                    // Apply material response
+                                    if (mat.metallic > 0.5) {
+                                        // Metallic materials use base color as specular color
+                                        dirLightContrib *= mat.albedo;
+                                    } else {
+                                        // Dielectric materials use base color as diffuse albedo
+                                        dirLightContrib *= mat.albedo;
+                                    }
+                                    
+                                    tcol += dirLightContrib / getWeightForPath(jdiff, -1);
+                                }
+                            }
+                        }
+                        
+                        // Connect to light path nodes
+                        if (mat.metallic < 0.5) {
+                            for (int i = 0; i < LIGHTPATHLENGTH; ++i) {
+                                float3 lp = lpNodes[i].position - pos;
+                                float3 lpn = normalize(lp);
+                                float3 lc = lpNodes[i].color;
+                                
+                                if (length(lpNodes[i].position) > 0.0 && !intersectShadow(pos, lpn, length(lp))) {
+                                    float weight = saturate(dot(lpn, normal)) 
+                                                 * saturate(dot(-lpn, lpNodes[i].normal)) 
+                                                 * clamp(1.0 / dot(lp, lp), 0.0, 1.0);
+                                    
+                                    tcol += lc * fcol * weight / getWeightForPath(jdiff, i);
+                                }
+                            }
+                        }
+                    }
+                    */
+                    
+                    // BRDF evaluation and next ray generation for opaque materials
+                    rd = getBRDFRay(normal, rd, mat, specularBounce, seed);
+                    
+                    // Apply material color based on PBR metallic workflow
+                    if (specularBounce) {
+                        // For specular/metallic materials, color is applied to specular reflection
+                        if (mat.metallic > 0.5) {
+                            fcol *= mat.albedo; // Metallic materials use base color as specular color
+                        }
+                        // Dielectric specular reflections don't tint the color
+                    } else {
+                        // For diffuse bounces, always apply albedo
+                        fcol *= mat.albedo;
+                    }
+                    
+                    // Russian roulette termination
+                    float maxComponent = max(fcol.r, max(fcol.g, fcol.b));
+                    if (j > 2 && hash1(seed) > maxComponent) {
+                        break;
+                    }
+                    if (maxComponent > 0.0) {
+                        fcol /= maxComponent;
+                    }
+                    
+                    ro = pos + normal * eps;
+                    
+                    if (!specularBounce) jdiff++; 
+                    else jdiff = 0;
+                }  
+                
+                return tcol;
             }
-
-            float G_Smith(float NdotV, float NdotL, float k) {
-                return G_SchlickGGX(NdotV, k) * G_SchlickGGX(NdotL, k);
-            }
-
-            float3 F_Schlick(float cosTheta, float3 F0) {
-                return F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
-            }
-
-#define LIGHTPATHLENGTH 2
-
-struct LightPathNode {
-    float3 color;
-    float3 position;
-    float3 normal;
-};
-
-LightPathNode lpNodes[LIGHTPATHLENGTH];
-
-float getWeightForPath(int e, int l) {
-    return float(e + l + 2);
-}
-
-float intersectShadow(float3 ro, float3 rd, float dist) {
-    float t = intersectSphere(ro, rd, float3(0.0, 0.0, 0.0), 1.0);
-    return t > 0.00001 && t < dist;
-}
-
-void constructLightPath(inout float seed, float2 uv, inout float noiseIndex) {
-    float3 ro = _PointLightPos.xyz;
-    float3 rd = randomHemisphereDirection(float3(0, 1, 0), seed, uv, noiseIndex);
-    float3 color = _PointLightColor.rgb * _PointIntensity;
-
-    for (int i = 0; i < LIGHTPATHLENGTH; i++) {
-        lpNodes[i].position = lpNodes[i].color = lpNodes[i].normal = float3(0.0, 0.0, 0.0);
-    }
-
-    for (int i = 0; i < LIGHTPATHLENGTH; i++) {
-        float t = intersectSphere(ro, rd, float3(0.0, 0.0, 0.0), 1.0);
-        if (t > 0.0) {
-            float3 pos = ro + rd * t;
-            float3 nor = normalize(pos);
-            ro = pos;
-            color *= _BaseColor.rgb;
-
-            lpNodes[i].position = pos;
-            lpNodes[i].color = color;
-            lpNodes[i].normal = nor;
-
-            rd = randomHemisphereDirection(nor, seed, uv, noiseIndex);
-        } else break;
-    }
-}
 
             float4 frag (v2f i) : SV_Target {
                 float2 uv = i.uv * 2.0 - 1.0;
-                float3 ro = float3(0.0, 0.0, 1.45); // Closer camera for matcap zoom
+                float3 ro = float3(0.0, 0.0, 1.45); // Camera position for matcap
                 float3 rd = normalize(float3(uv.x, uv.y, -1.0));
+                
                 float t = intersectSphere(ro, rd, float3(0.0, 0.0, 0.0), 1.0);
-                if (t < 0.0) return float4(GetSkyGradient(rd), 0.0); // transparent background
+                if (t < 0.0) return float4(GetSkyGradient(rd), 0.0);
 
                 float3 col = float3(0.0, 0.0, 0.0);
-                float3 F0 = lerp(float3(0.04, 0.04, 0.04), _BaseColor.rgb, _Metallic);
-                float k = (_Roughness + 1.0) * (_Roughness + 1.0) / 8.0;
-                float noiseIndex = 0.0;
-
-                float seed = i.uv.x * 1000.0 + i.uv.y * 1000.0 + _Time.y * 1000.0;
-                constructLightPath(seed, uv, noiseIndex);
-
-                // Single sample evaluation
-                float3 currentRo = ro;
-                float3 currentRd = rd;
-                float3 throughput = float3(1.0, 1.0, 1.0);
-                bool inside = false;
-
-                // Single bounce evaluation
-                for (int b = 0; b < 1; b++) {
-                    float t = intersectSphere(currentRo, currentRd, float3(0.0, 0.0, 0.0), 1.0);
-                    if (t < 0.0) {
-                        col += throughput * GetSkyGradient(currentRd);
-                        break;
-                    }
-
-                    float3 pos = currentRo + currentRd * t;
-                    float3 nor = normalize(pos);
-                    float3 V = -currentRd;
-                    Material mat = getMaterial(pos, nor);
-                    col += mat.emissive * throughput;
-
-                    // Direct light with BRDF
-                    float3 L_dir = normalize(_LightDir.xyz);
-                    float NdotL_dir = saturate(dot(nor, L_dir));
-                    if (NdotL_dir > 0.0) {
-                        float3 H_dir = normalize(V + L_dir);
-                        float NdotV = saturate(dot(nor, V));
-                        float NdotH_dir = saturate(dot(nor, H_dir));
-                        float VdotH_dir = saturate(dot(V, H_dir));
-                        float D_dir = D_GGX(NdotH_dir, _Roughness);
-                        float G_dir = G_Smith(NdotV, NdotL_dir, k);
-                        float3 F_dir = F_Schlick(VdotH_dir, F0);
-                        float3 spec_dir = D_dir * G_dir * F_dir / (4.0 * NdotV * NdotL_dir + 1e-6);
-                        float3 kd_dir = (1.0 - F_dir) * (1.0 - _Metallic) * _BaseColor.rgb / PI;
-                        float3 brdf_dir = kd_dir + spec_dir;
-                        float3 radiance_dir = _LightColor.rgb * _DirectionalIntensity;
-                        col += throughput * brdf_dir * radiance_dir * NdotL_dir;
-                    }
-
-                    // Point light
-                    float3 L = normalize(_PointLightPos.xyz - pos);
-                    float NdotL = saturate(dot(nor, L));
-                    if (NdotL > 0.0) {
-                        float3 H = normalize(V + L);
-                        float NdotV = saturate(dot(nor, V));
-                        float NdotH = saturate(dot(nor, H));
-                        float VdotH = saturate(dot(V, H));
-                        float D = D_GGX(NdotH, _Roughness);
-                        float G = G_Smith(NdotV, NdotL, k);
-                        float3 F = F_Schlick(VdotH, F0);
-                        float3 spec = D * G * F / (4.0 * NdotV * NdotL + 1e-6);
-                        float3 kd = (1.0 - F) * (1.0 - _Metallic) * _BaseColor.rgb / PI;
-                        float3 brdf = kd + spec;
-                        float dist = length(_PointLightPos.xyz - pos);
-                        float3 radiance = _PointLightColor.rgb / (dist * dist) * _PointIntensity;
-                        col += throughput * brdf * radiance * NdotL;
-                    }
-
-                    // Bidirectional connections for diffuse
-                    if (mat.transparency == 0.0) {
-                        for (int i = 0; i < LIGHTPATHLENGTH; i++) {
-                            if (lpNodes[i].position.x == 0.0 && lpNodes[i].position.y == 0.0 && lpNodes[i].position.z == 0.0) continue;
-                            float3 lp = lpNodes[i].position - pos;
-                            float3 lpn = normalize(lp);
-                            float3 lc = lpNodes[i].color;
-                            if (!intersectShadow(pos + nor * 0.001, lpn, length(lp))) {
-                                float weight = saturate(dot(lpn, nor)) * saturate(dot(-lpn, lpNodes[i].normal)) / dot(lp, lp);
-                                col += lc * throughput * weight / getWeightForPath(0, i);
-                            }
-                        }
-                    }
-
-                    // Transparency effect
-                    if (mat.transparency > 0.0) {
-                        float cosTheta = dot(V, nor);
-                        bool entering = (!inside && cosTheta > 0.0) || (inside && cosTheta < 0.0);
-                        float eta = entering ? (1.0 / mat.ior) : mat.ior;
-                        float3 F = F_Schlick(abs(cosTheta), float3(0.04, 0.04, 0.04));
-                        float rnd = random(seed, uv, noiseIndex);
-                        seed += 1.0;
-
-                        if (rnd < F.r) {
-                            currentRd = reflect(currentRd, nor);
-                            throughput *= F;
-                        } else {
-                            currentRd = refract(currentRd, nor, eta);
-                            if (length(currentRd) == 0.0) {
-                                currentRd = reflect(currentRd, nor);
-                                throughput *= F;
-                            } else {
-                                throughput *= (1.0 - F);
-                                inside = !inside;
-                            }
-                        }
-                        currentRo = pos + nor * 0.001 * (entering ? -1.0 : 1.0);
-                    } else {
-                        break;
-                    }
+                
+                // Multi-sample bidirectional path tracing
+                for (int sample = 0; sample < _NumSamples; sample++) {
+                    float seed = i.uv.x + i.uv.y * 3.43121412313 + _Time.y + float(sample) * 0.1;
+                    
+                    // Anti-aliasing jitter
+                    float2 jitter = hash2(seed) * 2.0 - 1.0;
+                    float3 jitteredRd = normalize(float3(uv.x + jitter.x * 0.001, uv.y + jitter.y * 0.001, -1.0));
+                    
+                    // Construct light paths for bidirectional tracing
+                    constructLightPath(seed);
+                    
+                    // Trace eye path with bidirectional connections
+                    col += traceEyePath(ro, jitteredRd, true, seed, uv);
                 }
+                
+                col /= float(_NumSamples);
 
-                // Tonemap
+                // Tonemap and gamma correct
                 if (_UseACES > 0.5) {
                     col = RRTAndODTFit(col);
-                    col = saturate(col);
                 }
-                return float4(linearToGamma(col), 1.0);
+                
+                return float4(linearToGamma(saturate(col)), 1.0);
             }
             ENDCG
         }

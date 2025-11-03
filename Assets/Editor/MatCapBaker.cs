@@ -23,12 +23,10 @@ public class MatCapBaker : EditorWindow {
     private Vector3 lightDir = new Vector3(0.577f, 0.577f, 0.577f);
     private Color lightColor = Color.white;
     private float directionalIntensity = 1.0f;
-    private Vector3 pointLightPos = new Vector3(0f, 0f, 0f);
-    private Color pointLightColor = Color.black;
-    private float pointIntensity = 1.0f;
+    private Vector3 pointLightPos = new Vector3(2f, 2f, 2f);
+    private Color pointLightColor = Color.white;
+    private float pointIntensity = 0.5f;
     private bool useACES = true;
-    private int numSamples = 16;
-    private int numBounces = 4;
 
     private const int SIZE = 32;
     // Preview RT size (larger for window preview)
@@ -92,8 +90,7 @@ public class MatCapBaker : EditorWindow {
         pointIntensity = EditorGUILayout.FloatField("Point Light Intensity", pointIntensity);
         useACES = EditorGUILayout.Toggle("Use ACES Tonemap", useACES);
         EditorGUILayout.Space();
-        numSamples = EditorGUILayout.IntSlider("Num Samples", numSamples, 1, 512);
-        numBounces = EditorGUILayout.IntSlider("Num Bounces", numBounces, 1, 8);
+        
 
         EditorGUILayout.Space();
         if (GUILayout.Button("Bake MatCap (32x32 RGBA16/EXR + PNG preview)")) {
@@ -159,8 +156,6 @@ public class MatCapBaker : EditorWindow {
         mat.SetColor("_PointLightColor", pointLightColor);
         mat.SetFloat("_PointIntensity", pointIntensity);
         mat.SetFloat("_UseACES", useACES ? 1f : 0f);
-        mat.SetInt("_NumSamples", numSamples);
-        mat.SetInt("_NumBounces", numBounces);
 
         RenderTexture prev = RenderTexture.active;
         Graphics.Blit(null, previewRT, mat);
@@ -197,8 +192,6 @@ public class MatCapBaker : EditorWindow {
     mat.SetColor("_PointLightColor", pointLightColor);
     mat.SetFloat("_PointIntensity", pointIntensity);
     mat.SetFloat("_UseACES", useACES ? 1f : 0f);
-    mat.SetInt("_NumSamples", numSamples);
-    mat.SetInt("_NumBounces", numBounces);
 
         // Render onto RT
         RenderTexture prev = RenderTexture.active;
