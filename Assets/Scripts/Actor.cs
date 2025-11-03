@@ -7,7 +7,7 @@ using System;
 using UnityEngine;
 
 /// <summary>
-/// Binary file header for Actor data files (.act) - Version 4 with embedded mesh data
+/// Binary file header for Actor data files (.act) 
 /// Compatible with C-based engines
 /// </summary>
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
@@ -1133,137 +1133,6 @@ public class Actor : MonoBehaviour
         return position;
     }
     
-    /// <summary>
-    /// C Engine Integration Documentation - Version 3 (16-bit Fixed-Point)
-    /// 
-    /// ACTOR FILE FORMAT V3 - 16-BIT FIXED-POINT COMPRESSION:
-    /// Version 3 introduces 16-bit fixed-point compression for transform data,
-    /// reducing file size by 50% while maintaining sufficient precision.
-    /// 
-    /// KEY CONCEPT: position_x/y/z represents the MODEL CENTER for RAT calculations.
-    /// The RAT format should always calculate vertex deltas from the model's center,
-    /// and the Actor position is that center point.
-    /// 
-    /// CONVERSION FORMULAS (for your C engine):
-    /// 
-    /// Position (per axis) - THIS IS THE MODEL CENTER:
-    ///   float_value = min_value + (fixed_value / 65535.0f) * (max_value - min_value)
-    /// 
-    /// Rotation (per axis):
-    ///   degrees = (fixed_value / 65535.0f) * 360.0f
-    /// 
-    /// Scale (all axes use same bounds):
-    ///   float_value = scale_min + (fixed_value / 65535.0f) * (scale_max - scale_min)
-    /// 
-    /// HEADER STRUCTURE (ActorHeader):
-    /// - Contains min/max bounds for position and scale
-    /// - All bounds stored as float32 for conversion
-    /// - No separate model_center bounds - position IS the model center
-    /// 
-    /// PRECISION ANALYSIS:
-    /// - 16-bit = 65,535 discrete values
-    /// - Rotation: ~0.0055° precision per step
-    /// - Position/Scale: Precision depends on animation bounds
-    /// - Smaller bounds = higher precision
-    /// 
-    /// LIMITS:
-    /// - Max keyframes: 65,535
-    /// - Max RAT files: 65,535
-    /// - Max frames per RAT: 65,535
-    /// </summary>
-    
-    /// <summary>
-    /// Documentation for C Engine Integration with Multi-RAT Support:
-    /// 
-    /// ACTOR FILE FORMAT V2 - MULTI-RAT SUPPORT:
-    /// The Actor file now supports references to multiple RAT files when animations
-    /// are split due to size constraints (default: 64KB per RAT file).
-    /// 
-    /// FILE STRUCTURE:
-    /// 1. ActorHeader (version 2):
-    ///    - magic: 'ACTR' (0x52544341)
-    ///    - version: 2
-    ///    - num_rat_files: Number of RAT files referenced
-    ///    - rat_filenames_length: Total bytes of all RAT filename strings
-    ///    - num_keyframes: Total transform keyframes across all RAT files
-    ///    - framerate: Animation framerate
-    ///    - transforms_offset: Offset to transform data
-    /// 
-    /// 2. RAT Filenames Section:
-    ///    - Concatenated null-terminated UTF-8 strings
-    ///    - Example: "model_part01of03.rat\0model_part02of03.rat\0model_part03of03.rat\0"
-    /// 
-    /// 3. Transform Data:
-    ///    - Array of ActorTransform structs
-    ///    - Each transform includes:
-    ///      * rat_file_index: Which RAT file (0-based index)
-    ///      * rat_local_frame: Frame index within that specific RAT file
-    /// 
-    /// C ENGINE LOADING ALGORITHM:
-    /// 
-    /// 1. Load Actor file:
-    ///    ```c
-    ///    ActorHeader header;
-    ///    fread(&header, sizeof(ActorHeader), 1, file);
-    ///    
-    ///    // Read RAT filenames
-    ///    char* rat_filenames = malloc(header.rat_filenames_length);
-    ///    fread(rat_filenames, header.rat_filenames_length, 1, file);
-    ///    
-    ///    // Parse individual filenames (split by null terminators)
-    ///    char** rat_file_list = parse_null_separated_strings(rat_filenames, header.num_rat_files);
-    ///    
-    ///    // Read transform data
-    ///    ActorTransform* transforms = malloc(sizeof(ActorTransform) * header.num_keyframes);
-    ///    fread(transforms, sizeof(ActorTransform), header.num_keyframes, file);
-    ///    ```
-    /// 
-    /// 2. Load all referenced RAT files:
-    ///    ```c
-    ///    CompressedAnimation** rat_animations = malloc(sizeof(CompressedAnimation*) * header.num_rat_files);
-    ///    for (int i = 0; i < header.num_rat_files; i++) {
-    ///        rat_animations[i] = load_rat_file(rat_file_list[i]);
-    ///    }
-    ///    ```
-    /// 
-    /// 3. Render a specific keyframe:
-    ///    ```c
-    ///    void render_actor_keyframe(uint32_t global_keyframe_index) {
-    ///        ActorTransform transform = transforms[global_keyframe_index];
-    ///        
-    ///        // Get the appropriate RAT file and local frame
-    ///        CompressedAnimation* rat_anim = rat_animations[transform.rat_file_index];
-    ///        uint32_t local_frame = transform.rat_local_frame;
-    ///        
-    ///        // Decompress RAT data to get vertex positions
-    ///        decompress_rat_to_frame(rat_context, rat_anim, local_frame);
-    ///        
-    ///        // Apply transform to vertices
-    ///        for (each vertex) {
-    ///            // 1. Add model center to RAT vertex (RAT stores deltas from center)
-    ///            vertex_world = rat_vertex + vec3(transform.model_center_x, model_center_y, model_center_z);
-    ///            
-    ///            // 2. Apply Actor transform: Scale -> Rotate -> Translate
-    ///            vertex_final = transform_matrix * vertex_world;
-    ///        }
-    ///    }
-    ///    ```
-    /// 
-    /// PERFORMANCE NOTES:
-    /// - Keep all RAT files loaded in memory for smooth playback
-    /// - Each RAT file is optimized for 64KB size for good memory locality
-    /// - Use the rat_file_index to minimize file switching during playback
-    /// - Sequential keyframes often reference the same RAT file
-    /// 
-    /// ERROR HANDLING:
-    /// - Verify all RAT files exist before starting playback
-    /// - Check that rat_file_index < num_rat_files for each transform
-    /// - Ensure rat_local_frame is within bounds for each RAT file
-    /// 
-    /// BACKWARD COMPATIBILITY:
-    /// - Version 1 Actor files (single RAT) are still supported
-    /// - Version 1 format stores single filename in rat_filenames_length field
-    /// </summary>
     public void CEngineMultiRatIntegrationDocumentation() { }
     
     /// <summary>
