@@ -38,7 +38,7 @@ Shader "Custom/MatcapVertex"
                 float3 viewNormal = normalize(mul((float3x3)UNITY_MATRIX_IT_MV, v.normal));
                 
                 // Compute matcap UV (normal in view space, mapped to 0-1)
-                o.matcapUV = viewNormal.xy * 0.44 + 0.5;
+                o.matcapUV = viewNormal.xy * 0.47 + 0.5;
                 
                 return o;
             }

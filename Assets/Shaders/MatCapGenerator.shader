@@ -433,44 +433,28 @@ Shader "MatCapGenerator/PBR"
                         }
                     }
                     
-                    // Handle transparency/refraction
+                    // Handle transparency/refraction (simplified fake approximation)
                     if (mat.transparency > 0.0) {
                         float ndotr = dot(rd, normal);
-                        bool entering = ndotr < 0.0;
                         
-                        // Flip normal if we're exiting the material
-                        if (!entering) {
-                            normal = -normal;
-                            ndotr = -ndotr;
-                        }
+                        // Simple Fresnel for transparency effect
+                        float fresnel = pow(1.0 - abs(ndotr), 2.0) * 0.5 + 0.5;
                         
-                        float eta = entering ? (1.0 / mat.ior) : mat.ior;
-                        
-                        // Fresnel calculation
-                        float r0 = (1.0 - mat.ior) / (1.0 + mat.ior);
-                        r0 *= r0;
-                        float fresnel = r0 + (1.0 - r0) * pow(1.0 - abs(ndotr), 5.0);
-                        
-                        // Decide between reflection and refraction
-                        if (hash1(seed) < fresnel) {
-                            // Reflection
+                        // Mix between reflection and transmission based on Fresnel
+                        if (hash1(seed) < fresnel * 0.3) {
+                            // Reflection path (rare for transparent materials)
                             rd = reflect(rd, normal);
                             specularBounce = true;
                         } else {
-                            // Refraction
-                            float3 refracted = refract(rd, normal, eta);
-                            if (length(refracted) > 0.0) {
-                                rd = refracted;
-                                inside = entering ? true : false;
-                                specularBounce = true;
-                            } else {
-                                // Total internal reflection
-                                rd = reflect(rd, normal);
-                                specularBounce = true;
-                            }
+                            // Transmission path - perturb ray slightly for fake subsurface
+                            float3 perturbDir = normalize(normal + randomSphereDirection(seed) * 0.2);
+                            rd = normalize(rd + perturbDir * (1.0 - mat.transparency) * 0.15);
+                            specularBounce = false;
+                            // Attenuate color as it passes through transparent material
+                            fcol *= lerp(float3(1.0, 1.0, 1.0), mat.albedo, mat.transparency * 0.3);
                         }
                         
-                        ro = pos + normal * eps * (entering ? -1.0 : 1.0);
+                        ro = pos + normal * eps * sign(ndotr);
                         continue; // Skip the rest of the loop for transparent materials
                     }
                     
