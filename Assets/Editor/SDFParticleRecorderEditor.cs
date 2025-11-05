@@ -13,7 +13,6 @@ public class SDFParticleRecorderEditor : Editor
     private SerializedProperty shapeResolutionProp;
     private SerializedProperty particleColorProp;
     private SerializedProperty useParticleSystemColorsProp;
-    private SerializedProperty particleRadiusProp;
     private SerializedProperty roundnessProp;
     private SerializedProperty smoothProp;
     private SerializedProperty thicknessProp;
@@ -39,7 +38,6 @@ public class SDFParticleRecorderEditor : Editor
         shapeResolutionProp = serializedObject.FindProperty("shapeResolution");
         particleColorProp = serializedObject.FindProperty("particleColor");
         useParticleSystemColorsProp = serializedObject.FindProperty("useParticleSystemColors");
-        particleRadiusProp = serializedObject.FindProperty("particleRadius");
         roundnessProp = serializedObject.FindProperty("roundness");
         smoothProp = serializedObject.FindProperty("smooth");
         thicknessProp = serializedObject.FindProperty("thickness");
@@ -92,7 +90,6 @@ public class SDFParticleRecorderEditor : Editor
         EditorGUILayout.PropertyField(shapeResolutionProp);
         EditorGUILayout.PropertyField(particleColorProp);
         EditorGUILayout.PropertyField(useParticleSystemColorsProp);
-        EditorGUILayout.PropertyField(particleRadiusProp);
         
         // Common shape parameters
         EditorGUILayout.PropertyField(smoothProp);

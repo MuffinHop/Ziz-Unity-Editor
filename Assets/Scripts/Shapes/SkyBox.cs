@@ -22,22 +22,69 @@ namespace ZizSceneEditor.Assets.Scripts.Shapes
         public int latitudeSegments = 24;
         public float radius = 500f;
 
+        [HideInInspector, SerializeField] private bool _hasBeenInitialized = false;
+        [HideInInspector, SerializeField] private Color _lastTopColor;
+        [HideInInspector, SerializeField] private Color _lastBottomColor;
+        [HideInInspector, SerializeField] private Color _lastHorizonColor;
+        [HideInInspector, SerializeField] private int _lastLongitudeSegments;
+        [HideInInspector, SerializeField] private int _lastLatitudeSegments;
+        [HideInInspector, SerializeField] private float _lastRadius;
+
         /// <summary>
         /// Context menu hook so you can right-click the component and choose Generate Skybox in the inspector.
         /// </summary>
         [ContextMenu("Generate Skybox")]
         public void GenerateSkyboxContext()
         {
+            _hasBeenInitialized = true;
+            SaveCurrentParameters();
             // Generate on this GameObject (so inspector changes update the component's GameObject)
-            GenerateOnGameObject(this.gameObject, longitudeSegments, latitudeSegments, radius, topColor, bottomColor, horizonColor);
+            GenerateOnGameObject(this.gameObject, longitudeSegments, latitudeSegments, radius, topColor, bottomColor, horizonColor); 
+        }
+
+        private void SaveCurrentParameters()
+        {
+            _lastTopColor = topColor;
+            _lastBottomColor = bottomColor;
+            _lastHorizonColor = horizonColor;
+            _lastLongitudeSegments = longitudeSegments;
+            _lastLatitudeSegments = latitudeSegments;
+            _lastRadius = radius;
+        }
+
+        private bool ParametersChanged()
+        {
+            return topColor != _lastTopColor ||
+                   bottomColor != _lastBottomColor ||
+                   horizonColor != _lastHorizonColor ||
+                   longitudeSegments != _lastLongitudeSegments ||
+                   latitudeSegments != _lastLatitudeSegments ||
+                   !Mathf.Approximately(radius, _lastRadius);
+        }
+
+        void Awake()
+        {
+            // Only generate skybox on first initialization to avoid resetting custom parameters after compilation
+            if (!_hasBeenInitialized)
+            {
+                _hasBeenInitialized = true;
+                SaveCurrentParameters();
+                GenerateOnGameObject(this.gameObject, longitudeSegments, latitudeSegments, radius, topColor, bottomColor, horizonColor);
+            }
         }
 
         void OnValidate()
         {
+            // Only regenerate if parameters have actually changed (not just during deserialization/compilation)
+            if (_hasBeenInitialized && ParametersChanged())
+            {
+                SaveCurrentParameters();
+            }
+            
             // Regenerate when inspector values change in the editor
             #if UNITY_EDITOR
             // Avoid doing heavy work if the editor is compiling or application is playing
-            if (!UnityEditor.EditorApplication.isPlayingOrWillChangePlaymode)
+            if (!UnityEditor.EditorApplication.isPlayingOrWillChangePlaymode && _hasBeenInitialized && ParametersChanged())
             {
                 // Try to update the existing mesh in-place immediately (safe during OnValidate).
                 // This avoids adding/removing components or assigning a new sharedMesh which can trigger SendMessage.
@@ -45,8 +92,11 @@ namespace ZizSceneEditor.Assets.Scripts.Shapes
                 // If components or mesh are missing, schedule the full creation for after the editor event loop.
                 UnityEditor.EditorApplication.delayCall += () =>
                 {
-                    if (!UnityEditor.EditorApplication.isPlayingOrWillChangePlaymode)
-                        GenerateOnGameObject(this.gameObject, longitudeSegments, latitudeSegments, radius, topColor, bottomColor);
+                    if (!UnityEditor.EditorApplication.isPlayingOrWillChangePlaymode && this != null && ParametersChanged())
+                    {
+                        SaveCurrentParameters();
+                        GenerateOnGameObject(this.gameObject, longitudeSegments, latitudeSegments, radius, topColor, bottomColor, horizonColor);
+                    }
                 };
             }
             #endif
@@ -333,7 +383,7 @@ namespace ZizSceneEditor.Assets.Scripts.Shapes
             }
 
             Mesh m = new Mesh();
-            m.name = "Ziz_Skybox_Mesh";
+            m.name = "Ziz_Skybox_Mesh";  
             m.SetVertices(verts);
             m.SetTriangles(tris, 0);
             m.SetColors(cols);
@@ -345,4 +395,4 @@ namespace ZizSceneEditor.Assets.Scripts.Shapes
             return m;
         }
     }
-}
+} 

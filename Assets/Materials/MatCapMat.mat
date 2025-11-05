@@ -88,14 +88,14 @@ Material:
     - _HeightScale: 0.585
     - _IBLIntensity: 1
     - _IOR: 1.378
-    - _Metallic: 0.922
+    - _Metallic: 0.724
     - _Mode: 0
     - _NumBounces: 1
     - _NumSamples: 1
     - _OcclusionStrength: 1
     - _Parallax: 0.02
     - _PointIntensity: 11.58
-    - _Roughness: 0.477
+    - _Roughness: 0.531
     - _SSSScale: 0.5
     - _SSSStrength: 0
     - _SmoothnessTextureChannel: 0
@@ -107,12 +107,12 @@ Material:
     - _Subsurface: 0.5
     - _Transparency: 0
     - _UVSec: 0
-    - _UseACES: 1
+    - _UseACES: 0
     - _UseFresnel: 1
     - _UseIBL: 1
     - _ZWrite: 1
     m_Colors:
-    - _BaseColor: {r: 0.5283019, g: 0.5283019, b: 0.5283019, a: 1}
+    - _BaseColor: {r: 1, g: 1, b: 1, a: 1}
     - _Color: {r: 1, g: 1, b: 1, a: 1}
     - _EmissionColor: {r: 0, g: 0, b: 0, a: 1}
     - _Emissive: {r: 0, g: 0, b: 0, a: 1}
@@ -123,6 +123,6 @@ Material:
     - _PointLightColor: {r: 1, g: 1, b: 1, a: 1}
     - _PointLightPos: {r: 2, g: 2, b: 2, a: 0}
     - _SSSColor: {r: 1, g: 0.8, b: 0.7, a: 1}
-    - _SkyColorHorizon: {r: 0.0026891606, g: 0.001512993, b: 0.01886791, a: 1}
-    - _SkyColorTop: {r: 0.6745283, g: 0.80552435, b: 1, a: 1}
+    - _SkyColorHorizon: {r: 0.18867922, g: 0.17710927, b: 0.17710927, a: 1}
+    - _SkyColorTop: {r: 0.81247777, g: 0.87203145, b: 0.9622642, a: 1}
   m_BuildTextureStacks: []

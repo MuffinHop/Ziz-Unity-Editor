@@ -156,6 +156,11 @@ public class SDFShape : MonoBehaviour
     {
         if (_renderTexture != null) 
         {
+            // Clear RenderTexture.active if it's set to this texture to avoid warning
+            if (RenderTexture.active == _renderTexture)
+            {
+                RenderTexture.active = null;
+            }
             _renderTexture.Release();
             DestroyImmediate(_renderTexture);
             _renderTexture = null;

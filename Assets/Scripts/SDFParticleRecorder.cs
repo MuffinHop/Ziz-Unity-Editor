@@ -1,6 +1,7 @@
 using UnityEngine;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 
 /// <summary>
 /// Records Unity ParticleSystem data and converts each particle into an SDF shape instance,
@@ -29,10 +30,6 @@ public class SDFParticleRecorder : MonoBehaviour
 
     [Tooltip("Use particle system's color over lifetime module if available.")]
     public bool useParticleSystemColors = true;
-
-    [Tooltip("Radius for SDF shapes (in world units).")]
-    [Range(0.01f, 2.0f)]
-    public float particleRadius = 0.4f;
 
     [Tooltip("Roundness for shapes like Box and Triangle.")]
     [Range(0.0f, 0.5f)]
@@ -276,7 +273,6 @@ public class SDFParticleRecorder : MonoBehaviour
         _sdfShapeTemplate.shapeType = particleShapeType;
         _sdfShapeTemplate.emulatedResolution = shapeResolution;
         _sdfShapeTemplate.color = particleColor;
-        _sdfShapeTemplate.radius = particleRadius;
         _sdfShapeTemplate.roundness = roundness;
         _sdfShapeTemplate.smooth = smooth;
         _sdfShapeTemplate.thickness = thickness;
@@ -332,8 +328,17 @@ public class SDFParticleRecorder : MonoBehaviour
             
             if (sdfTexture != null)
             {
-                // Create or modify the particle system's material
-                Material particleMaterial = _particleRenderer.material;
+                // In Edit Mode, use sharedMaterial to avoid leaking materials
+                // In Play Mode, use material to allow runtime modification
+                Material particleMaterial;
+                if (Application.isPlaying)
+                {
+                    particleMaterial = _particleRenderer.material;
+                }
+                else
+                {
+                    particleMaterial = _particleRenderer.sharedMaterial;
+                }
                 
                 if (particleMaterial == null)
                 {
@@ -353,7 +358,16 @@ public class SDFParticleRecorder : MonoBehaviour
                 
                 // Apply the SDF texture to the particle material
                 particleMaterial.mainTexture = sdfTexture;
-                _particleRenderer.material = particleMaterial;
+                
+                // Set the material back (use appropriate method based on mode)
+                if (Application.isPlaying)
+                {
+                    _particleRenderer.material = particleMaterial;
+                }
+                else
+                {
+                    _particleRenderer.sharedMaterial = particleMaterial;
+                }
                 
                 Debug.Log($"SDFParticleRecorder: Applied SDF texture to particle system material");
             }
@@ -376,7 +390,6 @@ public class SDFParticleRecorder : MonoBehaviour
             _sdfShapeTemplate.shapeType = particleShapeType;
             _sdfShapeTemplate.emulatedResolution = shapeResolution;
             _sdfShapeTemplate.color = particleColor;
-            _sdfShapeTemplate.radius = particleRadius;
             _sdfShapeTemplate.roundness = roundness;
             _sdfShapeTemplate.smooth = smooth;
             _sdfShapeTemplate.thickness = thickness;
@@ -651,27 +664,30 @@ public class SDFParticleRecorder : MonoBehaviour
 
         List<string> createdRatFiles = Rat.Tool.WriteRatFileWithSizeSplitting(baseFilename, compressed, maxFileSizeKB);
 
-        Debug.Log($"SDFParticleRecorder: Created {createdRatFiles.Count} RAT file(s):");
+        Debug.Log($"SDFParticleRecorder: Created {createdRatFiles.Count} file(s):");
         foreach (string file in createdRatFiles)
         {
             Debug.Log($"  - {file}");
         }
 
+        // Filter out .ratmesh file - only keep .rat animation files for Actor
+        List<string> ratAnimationFiles = createdRatFiles.Where(f => f.EndsWith(".rat")).ToList();
+
         // Create Actor animation data
         ActorAnimationData actorData = new ActorAnimationData();
         actorData.framerate = captureFramerate;
-        actorData.ratFilePaths.AddRange(createdRatFiles.ConvertAll(path => Path.GetFileName(path)));
+        actorData.ratFilePaths.AddRange(ratAnimationFiles.ConvertAll(path => Path.GetFileName(path)));
 
         // Create transform keyframes (particle system is stationary, but we need frame mapping)
         uint globalFrame = 0;
         uint currentFileIndex = 0;
         uint localFrameIndex = 0;
-        uint framesPerFile = compressed.num_frames / (uint)createdRatFiles.Count;
+        uint framesPerFile = ratAnimationFiles.Count > 0 ? compressed.num_frames / (uint)ratAnimationFiles.Count : compressed.num_frames;
 
         for (int i = 0; i < _recordedFrames.Count; i++)
         {
             // Calculate which RAT file this frame belongs to
-            if (localFrameIndex >= framesPerFile && currentFileIndex < createdRatFiles.Count - 1)
+            if (localFrameIndex >= framesPerFile && currentFileIndex < ratAnimationFiles.Count - 1)
             {
                 currentFileIndex++;
                 localFrameIndex = 0;
