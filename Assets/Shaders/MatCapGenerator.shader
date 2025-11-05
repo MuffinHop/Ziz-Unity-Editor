@@ -368,6 +368,7 @@ Shader "MatCapGenerator/PBR"
                             float3 dirLightDir = normalize(-_LightDir.xyz);
                             if (!intersectShadow(pos, dirLightDir, 1000.0)) {
                                 float NdotL = saturate(dot(dirLightDir, normal));
+                                
                                 if (NdotL > 0.0) {
                                     float3 viewDir = normalize(-rd);
                                     float3 halfDir = normalize(dirLightDir + viewDir);
@@ -376,20 +377,22 @@ Shader "MatCapGenerator/PBR"
                                     float HdotL = saturate(dot(halfDir, dirLightDir));
                                     
                                     // Fresnel for dielectrics
-                                    float3 F0 = lerp(float3(0.001, 0.001, 0.001), mat.albedo, mat.metallic);
+                                    float3 F0 = lerp(float3(0.04, 0.04, 0.04), mat.albedo, mat.metallic);
                                     float3 F = F_Schlick(HdotL, F0);
                                     
                                     // Diffuse contribution
-                                    float3 kD = (1.0 - F) * (1.0 - mat.metallic);
+                                    float3 kD = (1.0 - mat.metallic);
                                     float3 diffuse = kD * mat.albedo / PI;
                                     
-                                    // Specular contribution (simplified)
+                                    // Specular contribution
                                     float roughness = mat.roughness * mat.roughness;
                                     float D = D_GGX(NdotH, roughness);
                                     float G = GeometryTerm(NdotL, NdotV, roughness);
                                     float3 specular = (D * F * G) / max(4.0 * NdotL * NdotV, 0.001);
                                     
-                                    float3 dirLightContrib = (diffuse + specular) * _LightColor.rgb * _DirectionalIntensity * NdotL;
+                                    // Apply soft falloff to final lighting
+                                    float lightFalloff = pow(NdotL, 1.7); // Softer than linear
+                                    float3 dirLightContrib = (diffuse + specular) * lightFalloff * _LightColor.rgb * _DirectionalIntensity;
                                     tcol += fcol * dirLightContrib;
                                 }
                             }
@@ -403,6 +406,7 @@ Shader "MatCapGenerator/PBR"
                             
                             if (!intersectShadow(pos, nld, dist)) {
                                 float NdotL = saturate(dot(nld, normal));
+                                
                                 if (NdotL > 0.0) {
                                     float3 viewDir = normalize(-rd);
                                     float3 halfDir = normalize(nld + viewDir);
@@ -411,22 +415,25 @@ Shader "MatCapGenerator/PBR"
                                     float HdotL = saturate(dot(halfDir, nld));
                                     
                                     // Fresnel for dielectrics
-                                    float3 F0 = lerp(float3(0.001, 0.001, 0.001), mat.albedo, mat.metallic);
+                                    float3 F0 = lerp(float3(0.04, 0.04, 0.04), mat.albedo, mat.metallic);
                                     float3 F = F_Schlick(HdotL, F0);
                                     
                                     // Diffuse contribution
-                                    float3 kD = (1.0 - F) * (1.0 - mat.metallic);
+                                    float3 kD = (1.0 - mat.metallic);
                                     float3 diffuse = kD * mat.albedo / PI;
                                     
-                                    // Specular contribution (simplified)
+                                    // Specular contribution
                                     float roughness = mat.roughness * mat.roughness;
                                     float D = D_GGX(NdotH, roughness);
                                     float G = GeometryTerm(NdotL, NdotV, roughness);
                                     float3 specular = (D * F * G) / max(4.0 * NdotL * NdotV, 0.001);
                                     
+                                    // Apply soft falloff to final lighting
+                                    float lightFalloff = pow(NdotL, 1.7); // Softer than linear
+                                    
                                     // Distance attenuation
                                     float attenuation = 1.0 / (1.0 + 0.1 * dist + 0.01 * dist * dist);
-                                    float3 pointLightContrib = (diffuse + specular) * _PointLightColor.rgb * _PointIntensity * attenuation * NdotL;
+                                    float3 pointLightContrib = (diffuse + specular) * lightFalloff * _PointLightColor.rgb * _PointIntensity * attenuation;
                                     tcol += fcol * pointLightContrib;
                                 }
                             }

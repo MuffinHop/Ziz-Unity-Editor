@@ -73,11 +73,36 @@ public class ResolutionEmulatorPass : ScriptableRenderPass
 
         CommandBuffer cmd = CommandBufferPool.Get("Resolution Emulator");
 
-        // Get the current camera output
-        var source = renderingData.cameraData.renderer.cameraColorTargetHandle;
+        // Get the current camera output (RenderTargetIdentifier). In some URP versions
+        // cameraColorTargetHandle can be null or invalid; guard and use a temporary RT instead
+        var renderer = renderingData.cameraData.renderer;
+        if (renderer == null)
+        {
+            CommandBufferPool.Release(cmd);
+            return;
+        }
 
-        // Blit with the resolution emulator shader
-        cmd.Blit(source, source, _emulatorMaterial);
+        // Use cameraColorTargetHandle when available. Guard against null RTHandle to avoid the RTHandle op_Implicit assertion.
+        var camColorHandle = renderer.cameraColorTargetHandle;
+        if (camColorHandle == null || camColorHandle.rt == null)
+        {
+            CommandBufferPool.Release(cmd);
+            return;
+        }
+
+        RenderTargetIdentifier source = camColorHandle;
+
+        // Use a temporary RT to avoid reading and writing the same target (can cause asserts on some platforms)
+        int tempId = Shader.PropertyToID("_TempResolutionEmu");
+        cmd.GetTemporaryRT(tempId, Screen.width, Screen.height, 0, FilterMode.Bilinear, RenderTextureFormat.Default);
+
+        // Blit source -> temp using emulator (downsample/up sample happens in shader)
+        cmd.Blit(source, tempId, _emulatorMaterial);
+        // Blit temp -> source to write back
+        cmd.Blit(tempId, source);
+
+        // Release temp
+        cmd.ReleaseTemporaryRT(tempId);
 
         context.ExecuteCommandBuffer(cmd);
         CommandBufferPool.Release(cmd);

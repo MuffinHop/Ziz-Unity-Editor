@@ -73,7 +73,7 @@ Material:
     - _Cutoff: 0.5
     - _DetailNormalMapScale: 1
     - _DiffuseIBLIntensity: 1
-    - _DirectionalIntensity: 1.22
+    - _DirectionalIntensity: 2
     - _DstBlend: 0
     - _EnvMipScale: 8
     - _Exposure: 1.5
@@ -87,15 +87,15 @@ Material:
     - _GlossyReflections: 1
     - _HeightScale: 0.585
     - _IBLIntensity: 1
-    - _IOR: 1.441
+    - _IOR: 1.083
     - _Metallic: 1
     - _Mode: 0
     - _NumBounces: 1
     - _NumSamples: 1
     - _OcclusionStrength: 1
     - _Parallax: 0.02
-    - _PointIntensity: 3.2
-    - _Roughness: 1
+    - _PointIntensity: 12
+    - _Roughness: 0.426
     - _SSSScale: 0.5
     - _SSSStrength: 0
     - _SmoothnessTextureChannel: 0
@@ -104,6 +104,7 @@ Material:
     - _SpecularRoughnessFalloff: 0.5
     - _SpecularTint: 0.083
     - _SrcBlend: 1
+    - _Subsurface: 0.5
     - _Transparency: 0
     - _UVSec: 0
     - _UseACES: 1
@@ -117,11 +118,11 @@ Material:
     - _Emissive: {r: 0, g: 0, b: 0, a: 1}
     - _FresnelChannelMask: {r: 1, g: 1, b: 1, a: 0}
     - _FresnelTint: {r: 1, g: 1, b: 1, a: 1}
-    - _LightColor: {r: 1, g: 1, b: 1, a: 1}
-    - _LightDir: {r: 0.577, g: -0.03, b: -1.04, a: 0}
-    - _PointLightColor: {r: 1, g: 1, b: 1, a: 1}
-    - _PointLightPos: {r: 0.71, g: -0.55, b: 2.72, a: 0}
+    - _LightColor: {r: 0.9056604, g: 0.756141, b: 0.756141, a: 1}
+    - _LightDir: {r: 1.12, g: -1.78, b: -0.7, a: 0}
+    - _PointLightColor: {r: 0.48584908, g: 0.7097859, b: 1, a: 1}
+    - _PointLightPos: {r: 1.07, g: -0.9, b: 1.03, a: 0}
     - _SSSColor: {r: 1, g: 0.8, b: 0.7, a: 1}
-    - _SkyColorHorizon: {r: 0.3539516, g: 0.48534974, b: 0.7735849, a: 1}
-    - _SkyColorTop: {r: 0.0068084607, g: 0.3424838, b: 0.4811321, a: 1}
+    - _SkyColorHorizon: {r: 0.29156283, g: 0.2997838, b: 0.9811321, a: 1}
+    - _SkyColorTop: {r: 0.7735849, g: 0.49991098, b: 0.6104538, a: 1}
   m_BuildTextureStacks: []

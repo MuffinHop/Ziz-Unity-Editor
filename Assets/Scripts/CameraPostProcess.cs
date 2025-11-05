@@ -30,7 +30,7 @@ public class CameraPostProcess : ScriptableRendererFeature
             context.ExecuteCommandBuffer(cmd);
             CommandBufferPool.Release(cmd);
         }
-    }§
+    }
 
     public Material material;
     CustomRenderPass pass;
