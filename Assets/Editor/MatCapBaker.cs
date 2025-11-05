@@ -42,6 +42,18 @@ public class MatCapBaker : EditorWindow {
         w.minSize = new Vector2(360, 260);
     }
 
+    void EnsureMaterial() {
+        if (mat == null) {
+            Shader shader = Shader.Find("MatCapGenerator/PBR");
+            if (shader != null) {
+                mat = new Material(shader);
+                mat.name = "MatCapGenerator_Material";
+            } else {
+                Debug.LogError("MatCapBaker: Could not find shader 'MatCapGenerator/PBR'");
+            }
+        }
+    }
+
     void OnGUI() {
         // Preview pane
         GUILayout.BeginHorizontal();
@@ -59,13 +71,18 @@ public class MatCapBaker : EditorWindow {
         // Controls to update preview
         GUILayout.BeginHorizontal();
         if (GUILayout.Button("Quick Bake & Save", GUILayout.Width(140))) {
-            if (mat == null) EditorUtility.DisplayDialog("MatCap Baker", "Please assign a MatCap material first.", "OK"); else { BakeAndSave(); UpdatePreview(); }
+            EnsureMaterial();
+            if (mat == null) {
+                EditorUtility.DisplayDialog("MatCap Baker", "Shader 'MatCapGenerator/PBR' not found!", "OK");
+            } else {
+                BakeAndSave();
+                UpdatePreview();
+            }
         }
         GUILayout.EndHorizontal();
 
         GUILayout.Label("PBR MatCap Baker", EditorStyles.boldLabel);
 
-        mat = (Material)EditorGUILayout.ObjectField("MatCap Material", mat, typeof(Material), false);
         outputName = EditorGUILayout.TextField("Output base name", outputName);
         outputFolder = EditorGUILayout.TextField("Output folder (Assets/...)", outputFolder);
 
@@ -94,8 +111,9 @@ public class MatCapBaker : EditorWindow {
 
         EditorGUILayout.Space();
         if (GUILayout.Button("Bake MatCap (32x32 RGBA16/EXR + PNG preview)")) {
+            EnsureMaterial();
             if (mat == null) {
-                EditorUtility.DisplayDialog("MatCap Baker", "Please assign a MatCap material first.", "OK");
+                EditorUtility.DisplayDialog("MatCap Baker", "Shader 'MatCapGenerator/PBR' not found!", "OK");
             } else {
                 BakeAndSave();
             }
@@ -104,6 +122,7 @@ public class MatCapBaker : EditorWindow {
 
     void OnEnable() {
         CreatePreviewRT();
+        EnsureMaterial();
         EditorApplication.update += OnEditorUpdate;
     }
 
