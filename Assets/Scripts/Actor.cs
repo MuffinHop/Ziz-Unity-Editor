@@ -758,6 +758,24 @@ public class Actor : MonoBehaviour
         // Get mesh data - we'll need to extract this from the RAT files or generate default data
         var meshData = ExtractMeshDataFromRatFiles(data.ratFilePaths);
         
+        // Ensure meshData components are never null
+        if (meshData.uvs == null || meshData.uvs.Length == 0)
+        {
+            meshData.uvs = new Rat.VertexUV[] { new Rat.VertexUV { u = 0, v = 0 } };
+        }
+        if (meshData.colors == null || meshData.colors.Length == 0)
+        {
+            meshData.colors = new Rat.VertexColor[] { new Rat.VertexColor { r = 1, g = 1, b = 1, a = 1 } };
+        }
+        if (meshData.indices == null || meshData.indices.Length == 0)
+        {
+            meshData.indices = new ushort[] { 0 };
+        }
+        if (meshData.textureFilename == null)
+        {
+            meshData.textureFilename = "";
+        }
+        
         using (var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write))
         using (var writer = new BinaryWriter(stream))
         {
@@ -881,36 +899,44 @@ public class Actor : MonoBehaviour
     /// </summary>
     private static (Rat.VertexUV[] uvs, Rat.VertexColor[] colors, ushort[] indices, string textureFilename) ExtractMeshDataFromRatFiles(List<string> ratFilePaths)
     {
-        if (ratFilePaths.Count == 0)
+        // Default mesh data to return if anything fails
+        var defaultData = (
+            uvs: new Rat.VertexUV[] { new Rat.VertexUV { u = 0, v = 0 } },
+            colors: new Rat.VertexColor[] { new Rat.VertexColor { r = 1, g = 1, b = 1, a = 1 } },
+            indices: new ushort[] { 0 },
+            textureFilename: ""
+        );
+        
+        if (ratFilePaths == null || ratFilePaths.Count == 0)
         {
-            // Return default mesh data
-            return (
-                new Rat.VertexUV[] { new Rat.VertexUV { u = 0, v = 0 } },
-                new Rat.VertexColor[] { new Rat.VertexColor { r = 1, g = 1, b = 1, a = 1 } },
-                new ushort[] { 0 },
-                ""
-            );
+            return defaultData;
         }
         
         // Load the first RAT file to extract mesh data
         string firstRatPath = ratFilePaths[0];
         
+        if (string.IsNullOrEmpty(firstRatPath))
+        {
+            return defaultData;
+        }
+        
         try
         {
             var animation = Rat.Core.ReadRatFile(firstRatPath);
-            return (animation.uvs, animation.colors, animation.indices, animation.texture_filename);
+            
+            // Validate that all required fields are present
+            if (animation.uvs == null || animation.colors == null || animation.indices == null)
+            {
+                Debug.LogWarning($"Failed to extract mesh data from RAT file '{firstRatPath}': Missing required data");
+                return defaultData;
+            }
+            
+            return (animation.uvs, animation.colors, animation.indices, animation.texture_filename ?? "");
         }
         catch (System.Exception e)
         {
             Debug.LogWarning($"Failed to extract mesh data from RAT file '{firstRatPath}': {e.Message}");
-            
-            // Return minimal default data
-            return (
-                new Rat.VertexUV[] { new Rat.VertexUV { u = 0, v = 0 } },
-                new Rat.VertexColor[] { new Rat.VertexColor { r = 1, g = 1, b = 1, a = 1 } },
-                new ushort[] { 0 },
-                ""
-            );
+            return defaultData;
         }
     }
     

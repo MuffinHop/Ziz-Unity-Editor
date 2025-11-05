@@ -1,4 +1,4 @@
-using UnityEngine;
+﻿using UnityEngine;
 using UnityEditor;
 
 public class PackageTool
@@ -6,6 +6,7 @@ public class PackageTool
     [MenuItem("Package/Update Package")]
     static void UpdatePackage()
     {
-        AssetDatabase.ExportPackage("Assets/Klak", "Klak.unitypackage", ExportPackageOptions.Recurse);
+        string[] pathNames = { "Assets/Reaktion", "Assets/MidiJack", "Assets/OscJack" };
+        AssetDatabase.ExportPackage(pathNames, "Reaktion.unitypackage", ExportPackageOptions.Recurse);
     }
 }
