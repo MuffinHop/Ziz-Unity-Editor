@@ -3,6 +3,9 @@ using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using Rat; // Use the Rat namespace which contains all the compression logic
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
 
 /// <summary>
 /// A MonoBehaviour to record vertex animation from a SkinnedMeshRenderer or MeshFilter
@@ -68,6 +71,7 @@ public class RatRecorder : MonoBehaviour
     public bool preserveFirstFrame = false;
 
     private bool _isRecording = false;
+    private bool _recordingComplete = false; // Track if recording finished (but not yet saved)
     private float _recordingStartTime;
     private float _lastCaptureTime;
     private List<Vector3[]> _recordedFrames;
@@ -76,6 +80,27 @@ public class RatRecorder : MonoBehaviour
     private Mesh _tempMesh;
     private Mesh _sourceMesh;
     private Vector3 _modelCenter; // Center point of the model for delta calculations
+
+#if UNITY_EDITOR
+    void OnEnable()
+    {
+        EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
+    }
+
+    void OnDisable()
+    {
+        EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
+    }
+
+    void OnPlayModeStateChanged(PlayModeStateChange state)
+    {
+        if (state == PlayModeStateChange.ExitingPlayMode && _recordingComplete)
+        {
+            // Save the recording when exiting play mode
+            SaveRecording();
+        }
+    }
+#endif
 
     /// <summary>
     /// Initializes the recorder, finds the target mesh, and prepares for recording.
@@ -138,7 +163,7 @@ public class RatRecorder : MonoBehaviour
     {
         if (_isRecording && Time.time - _recordingStartTime >= recordingDuration)
         {
-            StopRecordingAndSave();
+            StopRecording();
         }
     }
 
@@ -309,11 +334,12 @@ public class RatRecorder : MonoBehaviour
     }
 
     /// <summary>
-    /// Stops recording and initiates the compression and file saving process.
+    /// Stops recording (but doesn't save - saving happens when exiting play mode).
     /// </summary>
-    private void StopRecordingAndSave()
+    private void StopRecording()
     {
         _isRecording = false;
+        _recordingComplete = true;
         
         if (_recordedFrames.Count == 0)
         {
@@ -321,7 +347,22 @@ public class RatRecorder : MonoBehaviour
             return;
         }
 
-        Debug.Log($"Recording stopped. Captured {_recordedFrames.Count} frames at {recordingScale}x scale. Compressing and splitting at {maxFileSizeKB}KB boundaries...");
+        Debug.Log($"Recording stopped. Captured {_recordedFrames.Count} frames at {recordingScale}x scale. Files will be saved when exiting play mode.");
+    }
+
+    /// <summary>
+    /// Saves the recorded animation to .rat and .ratmesh files.
+    /// This is called when exiting play mode.
+    /// </summary>
+    private void SaveRecording()
+    {
+        if (_recordedFrames.Count == 0)
+        {
+            Debug.LogWarning("No frames to save.");
+            return;
+        }
+
+        Debug.Log($"Saving recording with {_recordedFrames.Count} frames. Compressing and splitting at {maxFileSizeKB}KB boundaries...");
         Debug.Log($"Using delta-based compression from model center: {_modelCenter}");
 
         // Log what type of data was captured and compression settings
@@ -439,7 +480,9 @@ public class RatRecorder : MonoBehaviour
             Debug.LogError($"Unexpected error during RAT file creation: {ex.Message}");
             return;
         }
-        _recordedFrames.Clear(); // Clear frames for next recording
+        
+        _recordedFrames.Clear(); // Clear frames after saving
+        _recordingComplete = false; // Reset flag
     }
 
     /// <summary>
