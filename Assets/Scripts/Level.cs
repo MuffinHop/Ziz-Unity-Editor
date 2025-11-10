@@ -929,7 +929,8 @@ public class Level : MonoBehaviour
     }
     
     /// <summary>
-    /// Write data to EMU format file
+    /// Write data to EMU format file (version 4 with texture filename support)
+    /// Format matches emudraw.c load_emu() expectations exactly
     /// </summary>
     private void WriteEMUFile()
     {
@@ -948,20 +949,21 @@ public class Level : MonoBehaviour
         using (FileStream fs = new FileStream(fullPath, FileMode.Create))
         using (BinaryWriter writer = new BinaryWriter(fs))
         {
-            // EMU header - enhanced format with texture filename support
-            writer.Write(0x454D5520); // EMU_MAGIC: "EMU " (with space at end)
-            writer.Write(4);           // EMU_VERSION (version 4 for texture filename support)
-            writer.Write(0x01020304);  // EMU_ENDIAN_LE (little-endian marker)
+            // EMU header - CRITICAL: Exact format that emudraw.c expects
+            // Order: magic, version, endian (3 uint32s)
+            writer.Write(0x454D5520);  // EMU_MAGIC: "EMU " (0x454D5520 = little-endian bytes)
+            writer.Write(4U);          // EMU_VERSION: 4 (supports texture filename)
+            writer.Write(0x01020304U); // EMU_ENDIAN_LE marker (little-endian)
             
-            // CRITICAL: emudraw.c expects vcount, fcount, lcount right after header
-            // This is the exact format that emudraw.c load_emu() function expects
-            writer.Write(worldVertices.Count);  // vcount (vertex count)
-            writer.Write(faces.Count);          // fcount (face count) 
-            writer.Write(leafNodes.Count);      // lcount (leaf count)
+            // CRITICAL: Counts come IMMEDIATELY after header (no padding)
+            // emudraw.c expects: fread(&vcount, 4, 1, fp); fread(&fcount, 4, 1, fp); etc.
+            writer.Write((uint)worldVertices.Count);  // vcount (vertex count)
+            writer.Write((uint)faces.Count);          // fcount (face count) 
+            writer.Write((uint)leafNodes.Count);      // lcount (leaf count)
             
             // NEW: Texture filename support (version 4 feature)
-            // Write texture filename with length prefix
-            string textureFilename = textureFileName; // Use user-specified filename first
+            // Write texture filename with length prefix (uint32 length + string data)
+            string textureFilename = textureFileName;
             
             // If no user-specified filename, try to auto-detect from material
             if (string.IsNullOrEmpty(textureFilename))
@@ -982,27 +984,18 @@ public class Level : MonoBehaviour
                 textureFilename = "default.png";
             }
             
-            // NEW: Generate optimized texture if enabled
-            if (generateOptimizedTextures)
-            {
-                Debug.Log("🎨 Texture optimization enabled - using TextureProcessor utility");
-                // For now, keep original filename until TextureProcessor is fully integrated
-                Debug.LogWarning("TextureProcessor integration pending - using original texture filename");
-            }
-            
-            // Write texture filename as length-prefixed string
+            // Write texture filename as length-prefixed string (matching C's expectations)
             byte[] textureFilenameBytes = System.Text.Encoding.UTF8.GetBytes(textureFilename);
-            writer.Write((uint)textureFilenameBytes.Length); // Length prefix
-            writer.Write(textureFilenameBytes);              // Filename string
+            writer.Write((uint)textureFilenameBytes.Length); // Length prefix (uint32)
+            writer.Write(textureFilenameBytes);              // Filename string (no null terminator written)
             
             // Write texture filter mode (1 byte: 0=nearest, 1=bilinear)
             byte filterMode = useNearestFiltering ? (byte)0 : (byte)1;
             writer.Write(filterMode);
             
-            Debug.Log($"✅ EMU Header written: magic=0x454D5520, version=4, endian=0x01020304");
-            Debug.Log($"✅ EMU Counts written: vcount={worldVertices.Count}, fcount={faces.Count}, lcount={leafNodes.Count}");
-            Debug.Log($"✅ EMU Texture filename written: '{textureFilename}' ({textureFilenameBytes.Length} bytes)");
-            Debug.Log($"✅ EMU Texture filter mode written: {(useNearestFiltering ? "nearest" : "bilinear")} ({filterMode})");
+            Debug.Log($"✅ EMU Header: magic=0x454D5520, version=4, endian=0x01020304");
+            Debug.Log($"✅ EMU Counts: vcount={worldVertices.Count}, fcount={faces.Count}, lcount={leafNodes.Count}");
+            Debug.Log($"✅ EMU Texture: '{textureFilename}' ({textureFilenameBytes.Length} bytes), filter={filterMode}");
             
             // Vertex data (vcount × 3 floats) - NO COUNT PREFIX!
             foreach (Vector3 vertex in worldVertices) 
@@ -1012,10 +1005,9 @@ public class Level : MonoBehaviour
                 writer.Write(vertex.y);
                 writer.Write(-vertex.z);
             }
-            Debug.Log($"✅ Vertices written: {worldVertices.Count} vertices × 3 floats each (Z-flipped for OpenGL)");
+            Debug.Log($"✅ Vertices: {worldVertices.Count} × 3 floats (Z-flipped)");
             
             // Normal data (vcount × 3 floats) - NO COUNT PREFIX!
-            // Ensure we have normals for all vertices
             while (worldNormals.Count < worldVertices.Count)
             {
                 worldNormals.Add(Vector3.up);
@@ -1023,15 +1015,14 @@ public class Level : MonoBehaviour
             
             foreach (Vector3 normal in worldNormals)
             {
-                // Flip Z for right-handed coordinate system
                 writer.Write(normal.x);
                 writer.Write(normal.y);
                 writer.Write(-normal.z);
             }
-            Debug.Log($"✅ Normals written: {worldNormals.Count} normals × 3 floats each (Z-flipped for OpenGL)");
+            Debug.Log($"✅ Normals: {worldNormals.Count} × 3 floats (Z-flipped)");
             
-            // UV data (vcount × 2 bytes) - NO COUNT PREFIX! emudraw.c expects uint8_t u, v
-            // Ensure we have UVs for all vertices
+            // UV data (vcount × 2 bytes) - NO COUNT PREFIX!
+            // emudraw.c expects uint8_t u, v format
             while (textureCoords.Count < worldVertices.Count)
             {
                 textureCoords.Add(Vector2.zero);
@@ -1039,13 +1030,13 @@ public class Level : MonoBehaviour
             
             foreach (Vector2 uv in textureCoords)
             {
-                writer.Write((byte)(Mathf.Clamp01(uv.x) * 255)); // U as byte (0-255)
-                writer.Write((byte)(Mathf.Clamp01(1.0f - uv.y) * 255)); // V as byte (0-255), flipped for OpenGL
+                writer.Write((byte)(Mathf.Clamp01(uv.x) * 255)); // U as byte
+                writer.Write((byte)(Mathf.Clamp01(1.0f - uv.y) * 255)); // V as byte (flipped)
             }
-            Debug.Log($"✅ UVs written: {textureCoords.Count} UVs × 2 bytes each (uint8_t format, V-flipped for OpenGL)");
+            Debug.Log($"✅ UVs: {textureCoords.Count} × 2 bytes (V-flipped)");
             
-            // Color data (vcount × 3 bytes) - NO COUNT PREFIX! emudraw.c expects RGB bytes
-            // Ensure we have colors for all vertices
+            // Color data (vcount × 3 bytes) - NO COUNT PREFIX!
+            // emudraw.c expects RGB bytes (no alpha)
             while (vertexColors.Count < worldVertices.Count)
             {
                 vertexColors.Add(Color.white);
@@ -1053,62 +1044,54 @@ public class Level : MonoBehaviour
             
             foreach (Color color in vertexColors)
             {
-                writer.Write((byte)(Mathf.Clamp01(color.r) * 255)); // Red as byte
-                writer.Write((byte)(Mathf.Clamp01(color.g) * 255)); // Green as byte
-                writer.Write((byte)(Mathf.Clamp01(color.b) * 255)); // Blue as byte
-                // Note: No alpha component - emudraw.c expects only RGB
+                writer.Write((byte)(Mathf.Clamp01(color.r) * 255)); // Red
+                writer.Write((byte)(Mathf.Clamp01(color.g) * 255)); // Green
+                writer.Write((byte)(Mathf.Clamp01(color.b) * 255)); // Blue
             }
-            Debug.Log($"✅ Colors written: {vertexColors.Count} colors × 3 bytes each (RGB format)");
+            Debug.Log($"✅ Colors: {vertexColors.Count} × 3 bytes (RGB)");
             
             // Face data (fcount × 3 uint32) - NO COUNT PREFIX!
             foreach (Face face in faces)
             {
-                // Ensure we have exactly 3 vertices per face
                 if (face.vertexIndices.Length < 3)
                 {
-                    Debug.LogError($"Face has only {face.vertexIndices.Length} vertices, should be 3!");
+                    Debug.LogError($"Face has only {face.vertexIndices.Length} vertices!");
                     continue;
                 }
                 
-                // Validate vertex indices are within bounds
+                // Validate and clamp indices
                 for (int i = 0; i < 3; i++)
                 {
                     if (face.vertexIndices[i] >= worldVertices.Count)
                     {
-                        Debug.LogError($"Face vertex index {face.vertexIndices[i]} is out of bounds (max: {worldVertices.Count - 1})");
-                        face.vertexIndices[i] = 0; // Clamp to valid range
+                        face.vertexIndices[i] = 0;
                     }
                 }
                 
-                // Write exactly 3 vertex indices per face (uint32_t v[3])
-                // Flip winding order for OpenGL (front-face culling)
+                // Flip winding for OpenGL (indices written as v0, v2, v1 instead of v0, v1, v2)
                 writer.Write((uint)face.vertexIndices[0]);
                 writer.Write((uint)face.vertexIndices[2]);
                 writer.Write((uint)face.vertexIndices[1]);
             }
-            Debug.Log($"✅ Faces written: {faces.Count} faces × 3 uint32 indices each (winding flipped for OpenGL)");
+            Debug.Log($"✅ Faces: {faces.Count} × 3 uint32 indices (winding flipped)");
             
             // Leaf data (lcount leaves) - NO COUNT PREFIX!
             for (int i = 0; i < leafNodes.Count; i++)
             {
                 BSPNode leaf = leafNodes[i];
                 
-                // Number of faces in this leaf
-                writer.Write(leaf.faces.Count);
+                // Write face count for this leaf
+                writer.Write((uint)leaf.faces.Count);
                 
-                // Face indices for this leaf - these should be indices into the global face array
+                // Write face indices for this leaf
                 foreach (Face face in leaf.faces)
                 {
                     int faceIndex = faces.IndexOf(face);
-                    if (faceIndex == -1)
-                    {
-                        Debug.LogError($"Face not found in global face list for leaf {i}");
-                        faceIndex = 0; // Fallback to first face
-                    }
-                    writer.Write(faceIndex);
+                    if (faceIndex == -1) faceIndex = 0;
+                    writer.Write((uint)faceIndex);
                 }
                 
-                // Leaf bounding box (bbox_min, bbox_max) - Vec3 min, Vec3 max
+                // Write leaf bounding box (Vec3 min, Vec3 max = 6 floats)
                 writer.Write(leaf.bounds.min.x);
                 writer.Write(leaf.bounds.min.y);
                 writer.Write(leaf.bounds.min.z);
@@ -1116,11 +1099,11 @@ public class Level : MonoBehaviour
                 writer.Write(leaf.bounds.max.y);
                 writer.Write(leaf.bounds.max.z);
             }
-            Debug.Log($"✅ Leaves written: {leafNodes.Count} leaves with face indices and bounding boxes");
+            Debug.Log($"✅ Leaves: {leafNodes.Count} leaves with face indices and bboxes");
             
-            // PVS data (emudraw.c format)
-            int pvsBytes = (leafNodes.Count + 7) / 8; // Bits to bytes
-            writer.Write(pvsBytes); // pvs_bytes
+            // PVS data
+            int pvsBytes = (leafNodes.Count + 7) / 8;
+            writer.Write((uint)pvsBytes); // pvs_bytes
             
             // Write PVS data for each leaf
             for (int i = 0; i < leafNodes.Count; i++)
@@ -1129,49 +1112,38 @@ public class Level : MonoBehaviour
                 if (leafPVSData.ContainsKey(i))
                 {
                     pvsData = leafPVSData[i];
-                    // Ensure correct size
                     if (pvsData.Length < pvsBytes)
                     {
                         byte[] paddedData = new byte[pvsBytes];
-                        Array.Copy(pvsData, paddedData, pvsData.Length);
+                        System.Array.Copy(pvsData, paddedData, pvsData.Length);
                         pvsData = paddedData;
                     }
                 }
                 else
                 {
-                    // Default PVS: all leaves visible
                     pvsData = new byte[pvsBytes];
                     for (int j = 0; j < pvsBytes; j++)
                     {
-                        pvsData[j] = 0xFF; // All bits set
+                        pvsData[j] = 0xFF;
                     }
                 }
                 
                 writer.Write(pvsData);
             }
-            Debug.Log($"✅ PVS data written: {pvsBytes} bytes × {leafNodes.Count} leaves");
+            Debug.Log($"✅ PVS: {pvsBytes} bytes × {leafNodes.Count} leaves");
         }
         
         long fileSize = new FileInfo(fullPath).Length;
         Debug.Log("==========================================");
-        Debug.Log($"🎉 EMU FILE EXPORT COMPLETED SUCCESSFULLY!");
-        Debug.Log($"📁 File path: {fullPath}");
-        Debug.Log($"📊 File size: {fileSize} bytes");
-        Debug.Log($"🏗️  Format: EMU version 2 (emudraw.c compatible)");
+        Debug.Log($"🎉 EMU FILE EXPORT COMPLETED!");
+        Debug.Log($"📁 File: {fullPath}");
+        Debug.Log($"📊 Size: {fileSize} bytes");
         Debug.Log($"📐 Data: {worldVertices.Count} vertices, {faces.Count} faces, {leafNodes.Count} leaves");
-        Debug.Log($"🔧 Compatible with: ARM64 Unity → x86_64 emudraw (Rosetta 2)");
         Debug.Log("==========================================");
         
-        // Validate the written file
         ValidateEMUFile(fullPath);
-        
-        // Generate EMU structure dump for debugging
-        if (showDebugInfo)
-        {
-            DumpEMUStructure(fullPath);
-        }
     }
-    
+
     /// <summary>
     /// Write Vector3 with endian safety
     /// </summary>

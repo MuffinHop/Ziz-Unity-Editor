@@ -3,15 +3,13 @@ using UnityEditor;
 using System.IO;
 
 // Editor window to bake a PBR MatCap using the Hidden/MatCapGenerator/PBR shader
-// Produces a 32x32 RGBAHalf EXR (preserves 16-bit half floats) and an 8-bit PNG preview.
-// Note: Unity does not provide a built-in way to write 16-bit-per-channel PNGs. EXR (half) is the
-// practical file format to preserve 16-bit (half) channels. The PNG written here is 8-bit and
-// alpha is thresholded to 1-bit (0 or 255) as requested.
+// Produces an 8-bit PNG file.
+// Note: Alpha is thresholded to 1-bit (0 or 255) as requested.
 
 public class MatCapBaker : EditorWindow {
     private Material mat;
     private string outputName = "MatCap";
-    private string outputFolder = "Assets/MatCaps";
+    private string outputFolder = "Assets/Textures/";
     private Color baseColor = Color.gray;
     private float metallic = 0.0f;
     private float roughness = 0.25f;
@@ -110,7 +108,7 @@ public class MatCapBaker : EditorWindow {
         
 
         EditorGUILayout.Space();
-        if (GUILayout.Button("Bake MatCap (32x32 RGBA16/EXR + PNG preview)")) {
+        if (GUILayout.Button("Bake MatCap (PNG)")) {
             EnsureMaterial();
             if (mat == null) {
                 EditorUtility.DisplayDialog("MatCap Baker", "Shader 'MatCapGenerator/PBR' not found!", "OK");
@@ -189,6 +187,12 @@ public class MatCapBaker : EditorWindow {
             Directory.CreateDirectory(absFolder);
         }
 
+        // Ensure GeneratedData folder exists
+        string generatedDataFolder = Path.Combine(Application.dataPath, "..", "GeneratedData");
+        if (!Directory.Exists(generatedDataFolder)) {
+            Directory.CreateDirectory(generatedDataFolder);
+        }
+
         // Create a temporary RenderTexture with half precision (RGBAHalf)
         RenderTexture rt = new RenderTexture(SIZE, SIZE, 0, RenderTextureFormat.ARGBHalf);
         rt.dimension = UnityEngine.Rendering.TextureDimension.Tex2D;
@@ -196,83 +200,48 @@ public class MatCapBaker : EditorWindow {
         rt.Create();
 
         // Prepare material parameters
-    mat.SetColor("_BaseColor", baseColor);
-    mat.SetFloat("_Metallic", metallic);
-    mat.SetFloat("_Roughness", roughness);
-    mat.SetColor("_Emissive", emissive);
-    mat.SetFloat("_Transparency", transparency);
-    mat.SetFloat("_IOR", ior);
-    mat.SetColor("_SkyColorTop", skyColorTop);
-    mat.SetColor("_SkyColorHorizon", skyColorHorizon);
-    mat.SetVector("_LightDir", new Vector4(lightDir.x, lightDir.y, lightDir.z, 0));
-    mat.SetColor("_LightColor", lightColor);
-    mat.SetFloat("_DirectionalIntensity", directionalIntensity);
-    mat.SetVector("_PointLightPos", new Vector4(pointLightPos.x, pointLightPos.y, pointLightPos.z, 0));
-    mat.SetColor("_PointLightColor", pointLightColor);
-    mat.SetFloat("_PointIntensity", pointIntensity);
-    mat.SetFloat("_UseACES", useACES ? 1f : 0f);
+        mat.SetColor("_BaseColor", baseColor);
+        mat.SetFloat("_Metallic", metallic);
+        mat.SetFloat("_Roughness", roughness);
+        mat.SetColor("_Emissive", emissive);
+        mat.SetFloat("_Transparency", transparency);
+        mat.SetFloat("_IOR", ior);
+        mat.SetColor("_SkyColorTop", skyColorTop);
+        mat.SetColor("_SkyColorHorizon", skyColorHorizon);
+        mat.SetVector("_LightDir", new Vector4(lightDir.x, lightDir.y, lightDir.z, 0));
+        mat.SetColor("_LightColor", lightColor);
+        mat.SetFloat("_DirectionalIntensity", directionalIntensity);
+        mat.SetVector("_PointLightPos", new Vector4(pointLightPos.x, pointLightPos.y, pointLightPos.z, 0));
+        mat.SetColor("_PointLightColor", pointLightColor);
+        mat.SetFloat("_PointIntensity", pointIntensity);
+        mat.SetFloat("_UseACES", useACES ? 1f : 0f);
 
         // Render onto RT
         RenderTexture prev = RenderTexture.active;
         Graphics.Blit(null, rt, mat);
         RenderTexture.active = rt;
 
-        // Read pixels into a half float Texture2D for EXR (preserves half floats)
-        Texture2D texHalf = new Texture2D(SIZE, SIZE, TextureFormat.RGBAHalf, false, true);
-        texHalf.ReadPixels(new Rect(0, 0, SIZE, SIZE), 0, 0);
-        texHalf.Apply();
-
-        // Threshold alpha to 1-bit (0 or 1) on the half-float texture's pixel data
-        Color[] px = texHalf.GetPixels();
-        for (int i = 0; i < px.Length; ++i) {
-            px[i].a = px[i].a > 0.5f ? 1.0f : 0.0f;
-        }
-        texHalf.SetPixels(px);
-        texHalf.Apply();
-
-        // Save EXR (preserves half floats, closest to RGBA16 half precision)
-        string exrPath = Path.Combine(absFolder, outputName + ".exr");
-        byte[] exrBytes = texHalf.EncodeToEXR(Texture2D.EXRFlags.OutputAsFloat);
-        File.WriteAllBytes(exrPath, exrBytes);
-
-        // Produce an 8-bit PNG preview by rendering the same material into an 8-bit sRGB RT
-        RenderTexture rt8 = new RenderTexture(SIZE, SIZE, 0, RenderTextureFormat.ARGB32);
-        rt8.dimension = UnityEngine.Rendering.TextureDimension.Tex2D;
-        rt8.useMipMap = false;
-        rt8.Create();
-
-        // Render the material into the 8-bit sRGB RT so what we read matches the editor preview
-        Graphics.Blit(null, rt8, mat);
-        RenderTexture.active = rt8;
-
+        // Render the material into an 8-bit sRGB RT for PNG export
         Texture2D tex8 = new Texture2D(SIZE, SIZE, TextureFormat.RGBA32, false, false); // not linear (sRGB)
         tex8.ReadPixels(new Rect(0, 0, SIZE, SIZE), 0, 0);
         tex8.Apply();
 
-        // Threshold alpha to 1-bit on the 8-bit preview as well
-        // Color[] px8 = tex8.GetPixels();
-        // for (int i = 0; i < px8.Length; ++i) {
-        //     px8[i].a = px8[i].a > 0.5f ? 1.0f : 0.0f;
-        // }
-        // tex8.SetPixels(px8);
-        // tex8.Apply();
-
         string pngPath = Path.Combine(absFolder, outputName + ".png");
-        File.WriteAllBytes(pngPath, tex8.EncodeToPNG());
-
-        // Cleanup 8-bit RT
-        RenderTexture.active = rt;
-        rt8.Release();
-        DestroyImmediate(rt8);
+        string generatedDataPngPath = Path.Combine(generatedDataFolder, outputName + ".png");
+        
+        byte[] pngBytes = tex8.EncodeToPNG();
+        File.WriteAllBytes(pngPath, pngBytes);
+        File.WriteAllBytes(generatedDataPngPath, pngBytes);
 
         // Cleanup
         RenderTexture.active = prev;
         rt.Release();
         DestroyImmediate(rt);
+        DestroyImmediate(tex8);
 
         // Import the saved files so they appear in the Editor
         AssetDatabase.Refresh();
 
-        EditorUtility.DisplayDialog("MatCap Baker", "Baked and saved:\n" + exrPath + "\n" + pngPath, "OK");
+        EditorUtility.DisplayDialog("MatCap Baker", "Baked and saved:\n" + pngPath + "\n\nAlso saved to:\n" + generatedDataPngPath, "OK");
     }
 }

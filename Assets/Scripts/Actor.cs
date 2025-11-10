@@ -4,7 +4,11 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System;
+using System.Linq;
 using UnityEngine;
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
 
 /// <summary>
 /// Binary file header for Actor data files (.act) 
@@ -14,7 +18,7 @@ using UnityEngine;
 public struct ActorHeader
 {
     public uint magic;              // 'ACTR' = 0x52544341
-    public uint version;            // File format version (4 - includes mesh data)
+    public uint version;            // File format version (5 - includes rendering mode)
     public uint num_rat_files;      // Number of RAT files referenced
     public uint rat_filenames_length; // Total length of all RAT filename strings
     public uint num_keyframes;      // Number of transform keyframes
@@ -35,8 +39,11 @@ public struct ActorHeader
     public uint texture_filename_offset; // Offset to texture filename
     public uint texture_filename_length; // Length of texture filename
     
-    [MarshalAs(UnmanagedType.ByValArray, SizeConst = 8)]
-    public byte[] reserved;         // Reduced reserved space
+    // Rendering mode for material/lighting settings
+    public byte rendering_mode;     // ActorRenderingMode enum value (0-7)
+    
+    [MarshalAs(UnmanagedType.ByValArray, SizeConst = 7)]
+    public byte[] reserved;         // Reduced reserved space to fit rendering_mode
 }
 
 /// <summary>
@@ -95,12 +102,31 @@ public struct ActorTransformFloat
     public uint rat_local_frame;    // Frame index within the specific RAT file
 }
 
+/// <summary>
+/// Material and rendering mode options for Actor rendering
+/// </summary>
+public enum ActorRenderingMode
+{
+    VertexColoursOnly,
+    VertexColoursWithDirectionalLight,
+    VertexColoursWithVertexLighting,
+    TextureOnly,
+    TextureAndVertexColours,
+    TextureWithDirectionalLight,
+    TextureAndVertexColoursAndDirectionalLight,
+    MatCap
+}
+
 public class Actor : MonoBehaviour
 {
     public ActorAnimationData AnimationData { get; private set; } = new ActorAnimationData();
     
     [Header("Recording Settings")]
     public bool record = false;
+
+    [Header("Material & Rendering Settings")]
+    [Tooltip("Choose the material and lighting mode for this actor")]
+    public ActorRenderingMode renderingMode = ActorRenderingMode.TextureWithDirectionalLight;
 
     // Auto-generated fields (not shown in Inspector)
     private string ratFilePath = "";    // Auto-generated from transform name
@@ -184,53 +210,132 @@ public class Actor : MonoBehaviour
     /// </summary>
     private void GenerateAndProcessTexture(string cleanName)
     {
+        // MatCap rendering mode doesn't use _MainTex, so skip texture processing
+        if (renderingMode == ActorRenderingMode.MatCap)
+        {
+            Debug.Log($"Actor '{name}': Using MatCap rendering mode - no main texture needed.");
+            textureFilename = "";
+            return;
+        }
+        
         try
         {
-            // Extract texture from the actor's material
-            Texture2D sourceTexture = TextureProcessor.ExtractTextureFromGameObject(gameObject, true);
+            // First, try to extract texture from the actor's material directly
+            Texture2D sourceTexture = null;
+            
+            // Check the renderer's material
+            if (meshRenderer != null && meshRenderer.sharedMaterial != null)
+            {
+                Texture mainTex = meshRenderer.sharedMaterial.GetTexture("_MainTex");
+                if (mainTex != null)
+                {
+                    sourceTexture = mainTex as Texture2D;
+                }
+            }
+            
+            // Fallback: check skinned mesh renderer
+            if (sourceTexture == null && skinnedMeshRenderer != null && skinnedMeshRenderer.sharedMaterial != null)
+            {
+                Texture mainTex = skinnedMeshRenderer.sharedMaterial.GetTexture("_MainTex");
+                if (mainTex != null)
+                {
+                    sourceTexture = mainTex as Texture2D;
+                }
+            }
+            
+            // Last resort: use TextureProcessor to extract from GameObject and children
+            if (sourceTexture == null)
+            {
+                sourceTexture = TextureProcessor.ExtractTextureFromGameObject(gameObject, true);
+            }
             
             if (sourceTexture != null)
             {
-                // Determine optimal texture format for hardware constraints
-                string outputPath = Path.Combine("GeneratedData", $"{cleanName}_optimized.png");
+                // Create GeneratedData directory if it doesn't exist
+                string generatedDataPath = System.IO.Path.Combine(Application.dataPath.Replace("Assets", ""), "GeneratedData");
+                if (!System.IO.Directory.Exists(generatedDataPath))
+                {
+                    System.IO.Directory.CreateDirectory(generatedDataPath);
+                }
                 
-                // Process and optimize the texture
-                var formatInfo = TextureProcessor.ProcessAndOptimizeTexture(
-                    sourceTexture, 
-                    outputPath, 
-                    TextureProcessor.OptimizedTextureFormat.Auto,
-                    0, // Use format default size
-                    true // Enable palette formats
-                );
+                // Save texture directly to GeneratedData as PNG
+                string outputPath = System.IO.Path.Combine("GeneratedData", $"{cleanName}.png");
+                string fullPath = System.IO.Path.Combine(Application.dataPath.Replace("Assets", ""), outputPath);
                 
-                // Generate optimized filename based on the processing result
-                textureFilename = TextureProcessor.GenerateOptimizedFilename(outputPath, formatInfo);
+                // Read the texture data
+                byte[] pngData = null;
                 
-                Debug.Log($"Actor '{name}': Processed texture to '{textureFilename}' using format {formatInfo.format} ({formatInfo.size}x{formatInfo.size})");
+                // If the texture is readable, encode it directly
+                if (sourceTexture.isReadable)
+                {
+                    pngData = sourceTexture.EncodeToPNG();
+                    if (pngData != null && pngData.Length > 0)
+                    {
+                        System.IO.File.WriteAllBytes(fullPath, pngData);
+                        textureFilename = $"{cleanName}.png";
+                        Debug.Log($"Actor '{name}': Exported readable texture '{sourceTexture.name}' to '{outputPath}' ({pngData.Length} bytes)");
+                    }
+                    else
+                    {
+                        Debug.LogWarning($"Actor '{name}': Failed to encode texture to PNG.");
+                        GenerateFallbackTexture(cleanName);
+                    }
+                }
+                else
+                {
+                    // If not readable, we need to read it via RenderTexture
+                    RenderTexture tempRT = RenderTexture.GetTemporary(sourceTexture.width, sourceTexture.height, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
+                    Graphics.Blit(sourceTexture, tempRT);
+                    
+                    RenderTexture prev = RenderTexture.active;
+                    RenderTexture.active = tempRT;
+                    
+                    Texture2D readableTexture = new Texture2D(sourceTexture.width, sourceTexture.height, TextureFormat.ARGB32, false);
+                    readableTexture.ReadPixels(new Rect(0, 0, sourceTexture.width, sourceTexture.height), 0, 0, false);
+                    readableTexture.Apply(false, false);
+                    
+                    RenderTexture.active = prev;
+                    RenderTexture.ReleaseTemporary(tempRT);
+                    
+                    pngData = readableTexture.EncodeToPNG();
+                    if (pngData != null && pngData.Length > 0)
+                    {
+                        System.IO.File.WriteAllBytes(fullPath, pngData);
+                        textureFilename = $"{cleanName}.png";
+                        Debug.Log($"Actor '{name}': Exported non-readable texture '{sourceTexture.name}' to '{outputPath}' ({pngData.Length} bytes)");
+                    }
+                    else
+                    {
+                        Debug.LogWarning($"Actor '{name}': Failed to encode texture to PNG.");
+                        GenerateFallbackTexture(cleanName);
+                    }
+                    
+                    DestroyImmediate(readableTexture);
+                }
             }
             else
             {
-                Debug.LogWarning($"Actor '{name}': No texture found on GameObject or its children. Using fallback texture naming.");
+                Debug.LogWarning($"Actor '{name}': No texture found on GameObject, material, or children. Using fallback texture naming.");
                 GenerateFallbackTexture(cleanName);
             }
         }
         catch (System.Exception e)
         {
-            Debug.LogWarning($"Actor '{name}': Failed to process texture with TextureProcessor: {e.Message}. Using fallback texture naming.");
+            Debug.LogWarning($"Actor '{name}': Failed to export texture: {e.Message}\n{e.StackTrace}");
             GenerateFallbackTexture(cleanName);
         }
     }
     
     /// <summary>
-    /// Generates fallback texture filename when TextureProcessor fails or no texture is found
+    /// Generates fallback texture filename when texture export fails or no texture is found
     /// </summary>
     private void GenerateFallbackTexture(string cleanName)
     {
         // Use naming convention: actor name + .png
-        textureFilename = $"assets/{cleanName}.png";
+        textureFilename = $"{cleanName}.png";
         Debug.Log($"Actor '{name}': Using fallback texture filename: '{textureFilename}'");
     }
-    
+
     /// <summary>
     /// Validates that we have the required components and sets them up
     /// </summary>
@@ -272,17 +377,195 @@ public class Actor : MonoBehaviour
         {
             Debug.LogWarning($"Actor '{name}' has no Animator component in this GameObject or its parents. Consider adding one for animation control.");
         }
+        
+        // Set up the shader and material for this rendering mode
+        SetupShaderAndMaterial();
     }
     
-    // --- Fixed-Point Conversion Helpers ---
+    /// <summary>
+    /// Sets up the correct shader and material for the current rendering mode
+    /// </summary>
+    private void SetupShaderAndMaterial()
+    {
+        // Get the renderer component
+        Renderer renderer = meshRenderer != null ? (Renderer)meshRenderer : (Renderer)skinnedMeshRenderer;
+        
+        if (renderer == null)
+        {
+            Debug.LogError($"Actor '{name}': No renderer found for shader setup!");
+            return;
+        }
+        
+        // Map rendering mode to shader name
+        string shaderName = GetShaderNameForRenderingMode(renderingMode);
+        
+        if (string.IsNullOrEmpty(shaderName))
+        {
+            Debug.LogError($"Actor '{name}': Unknown rendering mode: {renderingMode}");
+            return;
+        }
+        
+        // Load the shader
+        Shader shader = Shader.Find(shaderName);
+        
+        if (shader == null)
+        {
+            Debug.LogWarning($"Actor '{name}': Shader '{shaderName}' not found yet (may not be imported). Skipping material setup.");
+            return;
+        }
+        
+        // Create a new material with this shader
+        Material material = new Material(shader);
+        material.name = $"{gameObject.name}_{renderingMode}";
+        
+        // Load and assign texture if the rendering mode uses textures
+        if (RequiresTexture(renderingMode))
+        {
+            Texture2D texture = LoadTextureForActor();
+            if (texture != null)
+            {
+                material.SetTexture("_MainTex", texture);
+                Debug.Log($"Actor '{name}': Applied texture '{texture.name}' to {renderingMode} shader");
+            }
+        }
+        
+        // Load and assign matcap texture if needed
+        if (renderingMode == ActorRenderingMode.MatCap)
+        {
+            Texture2D matcap = LoadMatcapTexture();
+            if (matcap != null)
+            {
+                material.SetTexture("_Matcap", matcap);
+                Debug.Log($"Actor '{name}': Applied matcap texture '{matcap.name}'");
+            }
+        }
+        
+        // Apply the material to all materials on the renderer
+        renderer.material = material;
+        
+        Debug.Log($"Actor '{name}': Applied shader '{shaderName}' for rendering mode '{renderingMode}'");
+    }
+    
+    /// <summary>
+    /// Gets the shader name for a given rendering mode
+    /// </summary>
+    private static string GetShaderNameForRenderingMode(ActorRenderingMode mode)
+    {
+        return mode switch
+        {
+            ActorRenderingMode.VertexColoursOnly => "Actor/VertexColoursOnly",
+            ActorRenderingMode.VertexColoursWithDirectionalLight => "Actor/VertexColoursWithDirectionalLight",
+            ActorRenderingMode.VertexColoursWithVertexLighting => "Actor/VertexColoursWithVertexLighting",
+            ActorRenderingMode.TextureOnly => "Actor/TextureOnly",
+            ActorRenderingMode.TextureAndVertexColours => "Actor/TextureAndVertexColours",
+            ActorRenderingMode.TextureWithDirectionalLight => "Actor/TextureWithDirectionalLight",
+            ActorRenderingMode.TextureAndVertexColoursAndDirectionalLight => "Actor/TextureAndVertexColoursAndDirectionalLight",
+            ActorRenderingMode.MatCap => "Actor/MatCap",
+            _ => null
+        };
+    }
+    
+    /// <summary>
+    /// Determines if a rendering mode requires a main texture
+    /// </summary>
+    private static bool RequiresTexture(ActorRenderingMode mode)
+    {
+        return mode switch
+        {
+            ActorRenderingMode.TextureOnly => true,
+            ActorRenderingMode.TextureAndVertexColours => true,
+            ActorRenderingMode.TextureWithDirectionalLight => true,
+            ActorRenderingMode.TextureAndVertexColoursAndDirectionalLight => true,
+            _ => false
+        };
+    }
+    
+    /// <summary>
+    /// Loads a texture for this actor from the file system
+    /// </summary>
+    private Texture2D LoadTextureForActor()
+    {
+#if UNITY_EDITOR
+        // First try the generated/optimized texture filename
+        if (!string.IsNullOrEmpty(textureFilename))
+        {
+            string texturePath = Path.Combine("Assets", textureFilename);
+            Texture2D texture = UnityEditor.AssetDatabase.LoadAssetAtPath<Texture2D>(texturePath);
+            if (texture != null)
+            {
+                return texture;
+            }
+        }
+#endif
+        
+        // Try to extract from existing material
+        if (meshRenderer != null && meshRenderer.sharedMaterial != null)
+        {
+            Texture mainTex = meshRenderer.sharedMaterial.GetTexture("_MainTex");
+            if (mainTex != null)
+            {
+                return mainTex as Texture2D;
+            }
+        }
+        
+        if (skinnedMeshRenderer != null && skinnedMeshRenderer.sharedMaterial != null)
+        {
+            Texture mainTex = skinnedMeshRenderer.sharedMaterial.GetTexture("_MainTex");
+            if (mainTex != null)
+            {
+                return mainTex as Texture2D;
+            }
+        }
+        
+        return null;
+    }
+    
+    /// <summary>
+    /// Loads a matcap texture for this actor
+    /// </summary>
+    private Texture2D LoadMatcapTexture()
+    {
+#if UNITY_EDITOR
+        // Try to find a matcap texture in the project
+        string[] matcapGuids = UnityEditor.AssetDatabase.FindAssets("MatCap t:Texture2D");
+        
+        if (matcapGuids.Length > 0)
+        {
+            // Use the first matcap found
+            string matcapPath = UnityEditor.AssetDatabase.GUIDToAssetPath(matcapGuids[0]);
+            Texture2D matcap = UnityEditor.AssetDatabase.LoadAssetAtPath<Texture2D>(matcapPath);
+            if (matcap != null)
+            {
+                return matcap;
+            }
+        }
+        
+        // Try specific matcap paths
+        string[] potentialPaths = new[]
+        {
+            "Assets/MatCaps/default.png",
+            "Assets/MatCaps/matcap.png",
+            "Assets/Textures/MatCap.png",
+            "Assets/Shaders/MatCap.png"
+        };
+        
+        foreach (string path in potentialPaths)
+        {
+            Texture2D matcap = UnityEditor.AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+            if (matcap != null)
+            {
+                return matcap;
+            }
+        }
+#endif
+        
+        Debug.LogWarning($"Actor '{name}': Could not find matcap texture. Using white texture as fallback.");
+        return null;
+    }
     
     /// <summary>
     /// Converts a float value to 16-bit fixed-point within the given range
     /// </summary>
-    /// <param name="value">Float value to convert</param>
-    /// <param name="minValue">Minimum value in the range</param>
-    /// <param name="maxValue">Maximum value in the range</param>
-    /// <returns>16-bit fixed-point representation</returns>
     private static ushort FloatToFixed16(float value, float minValue, float maxValue)
     {
         if (maxValue <= minValue) return 0;
@@ -300,10 +583,6 @@ public class Actor : MonoBehaviour
     /// <summary>
     /// Converts a 16-bit fixed-point value back to float within the given range
     /// </summary>
-    /// <param name="fixedValue">16-bit fixed-point value</param>
-    /// <param name="minValue">Minimum value in the range</param>
-    /// <param name="maxValue">Maximum value in the range</param>
-    /// <returns>Float representation</returns>
     private static float Fixed16ToFloat(ushort fixedValue, float minValue, float maxValue)
     {
         if (maxValue <= minValue) return minValue;
@@ -318,8 +597,6 @@ public class Actor : MonoBehaviour
     /// <summary>
     /// Converts rotation from degrees (0-360) to 16-bit fixed-point
     /// </summary>
-    /// <param name="degrees">Rotation in degrees</param>
-    /// <returns>16-bit fixed-point representation</returns>
     private static ushort DegreesToFixed16(float degrees)
     {
         // Normalize to 0-360 range
@@ -333,8 +610,6 @@ public class Actor : MonoBehaviour
     /// <summary>
     /// Converts 16-bit fixed-point back to degrees (0-360)
     /// </summary>
-    /// <param name="fixedValue">16-bit fixed-point value</param>
-    /// <returns>Rotation in degrees</returns>
     private static float Fixed16ToDegrees(ushort fixedValue)
     {
         // Convert from 16-bit to 0-360 degree range
@@ -423,7 +698,6 @@ public class Actor : MonoBehaviour
     /// <summary>
     /// Gets the frame rate of the currently playing animation clip
     /// </summary>
-    /// <returns>The frame rate of the current animation, or 30 FPS as fallback</returns>
     private float GetCurrentAnimationFrameRate()
     {
         if (animator == null || animator.runtimeAnimatorController == null)
@@ -451,8 +725,6 @@ public class Actor : MonoBehaviour
     /// <summary>
     /// Gets the current keyframe for a specific animation layer
     /// </summary>
-    /// <param name="layerIndex">The animator layer index</param>
-    /// <returns>The current keyframe for the specified layer</returns>
     public long GetCurrentKeyFrame(int layerIndex = 0)
     {
         if (animator == null) return 0;
@@ -471,8 +743,6 @@ public class Actor : MonoBehaviour
     /// <summary>
     /// Sets the animator to a specific keyframe (useful for scene editing)
     /// </summary>
-    /// <param name="keyFrame">The target keyframe</param>
-    /// <param name="layerIndex">The animator layer index</param>
     public void SetKeyFrame(long keyFrame, int layerIndex = 0)
     {
         if (animator == null) return;
@@ -493,8 +763,6 @@ public class Actor : MonoBehaviour
     /// <summary>
     /// Gets the frame rate of the animation playing on a specific layer
     /// </summary>
-    /// <param name="layerIndex">The animator layer index</param>
-    /// <returns>The frame rate of the animation on the specified layer, or 30 FPS as fallback</returns>
     private float GetAnimationFrameRate(int layerIndex = 0)
     {
         if (animator == null || animator.runtimeAnimatorController == null)
@@ -519,8 +787,6 @@ public class Actor : MonoBehaviour
     /// <summary>
     /// Gets the current animation's frame rate (public for debugging/inspection)
     /// </summary>
-    /// <param name="layerIndex">The animator layer index</param>
-    /// <returns>The frame rate of the current animation</returns>
     public float GetCurrentFrameRate(int layerIndex = 0)
     {
         return GetAnimationFrameRate(layerIndex);
@@ -529,8 +795,6 @@ public class Actor : MonoBehaviour
     /// <summary>
     /// Gets the duration of the currently playing animation clip
     /// </summary>
-    /// <param name="layerIndex">The animator layer index</param>
-    /// <returns>The duration of the current animation in seconds, or 5.0 as fallback</returns>
     public float GetAnimationDuration(int layerIndex = 0)
     {
         if (animator == null || animator.runtimeAnimatorController == null)
@@ -555,8 +819,6 @@ public class Actor : MonoBehaviour
     /// <summary>
     /// Calculates the total number of frames in the animation
     /// </summary>
-    /// <param name="layerIndex">The animator layer index</param>
-    /// <returns>Total number of frames in the animation</returns>
     public uint GetTotalFrames(int layerIndex = 0)
     {
         float duration = GetAnimationDuration(layerIndex);
@@ -683,9 +945,6 @@ public class Actor : MonoBehaviour
                 ratRecorder.baseFilename = baseFilename;
                 
                 Debug.Log($"Actor '{name}': RatRecorder is configured to save RAT file as {baseFilename}.rat");
-                
-                // Note: RatRecorder automatically handles saving when its recording duration is reached
-                // We just need to make sure it's using the same filename
             }
             else
             {
@@ -695,18 +954,36 @@ public class Actor : MonoBehaviour
             // Update the RAT file paths in our animation data
             if (AnimationData.ratFilePaths.Count == 0)
             {
-                // If no RAT files specified yet, add the default single file path for compatibility
                 AnimationData.ratFilePaths.Add(ratFilePath);
             }
-            
-            // TODO: Get actual RAT file list from RatRecorder when it implements size-based splitting
-            // For now, we'll update this when the RatRecorder integration is complete
             
             // Update transform data with RAT file mapping information
             UpdateTransformRatFileReferences();
             
-            // Save Actor data with .act extension
-            SaveActorData(actorFilePath, AnimationData);
+            // RIGHT BEFORE calling SaveActorData, add this diagnostic block:
+            Debug.Log($"=== DIAGNOSTIC: RAT File Paths Before Save ===");
+            Debug.Log($"AnimationData.ratFilePaths.Count = {AnimationData.ratFilePaths.Count}");
+            for (int i = 0; i < AnimationData.ratFilePaths.Count; i++)
+            {
+                string path = AnimationData.ratFilePaths[i];
+                Debug.Log($"  [{i}] = '{path}' (length: {path?.Length ?? -1})");
+                
+                // Log byte-by-byte breakdown
+                if (!string.IsNullOrEmpty(path))
+                {
+                    byte[] bytes = System.Text.Encoding.UTF8.GetBytes(path);
+                    System.Text.StringBuilder hex = new System.Text.StringBuilder();
+                    for (int b = 0; b < Math.Min(bytes.Length, 32); b++)
+                    {
+                        hex.AppendFormat("{0:X2} ", bytes[b]);
+                    }
+                    Debug.Log($"      Hex: {hex}");
+                }
+            }
+            Debug.Log($"=== END DIAGNOSTIC ===");
+            
+            // Save Actor data with .act extension (include rendering mode)
+            SaveActorData(actorFilePath, AnimationData, renderingMode);
             
             Debug.Log($"Actor '{name}': Actor file saved successfully:");
             Debug.Log($"  - Actor file: {actorFilePath} (transform animation)");
@@ -728,11 +1005,9 @@ public class Actor : MonoBehaviour
     
     /// <summary>
     /// Saves actor animation data to a binary file with 16-bit fixed-point compression
-    /// and embedded mesh data (Version 4 format)
+    /// and embedded mesh data (Version 5 format with rendering mode)
     /// </summary>
-    /// <param name="filePath">Path to save the .act file</param>
-    /// <param name="data">Animation data to save</param>
-    public static void SaveActorData(string filePath, ActorAnimationData data)
+    public static void SaveActorData(string filePath, ActorAnimationData data, ActorRenderingMode renderingMode = ActorRenderingMode.TextureWithDirectionalLight)
     {
         if (data.transforms.Count == 0)
         {
@@ -776,17 +1051,63 @@ public class Actor : MonoBehaviour
             meshData.textureFilename = "";
         }
         
+        // Ensure texture is saved if rendering mode requires it
+        if (RequiresTexture(renderingMode) && string.IsNullOrEmpty(meshData.textureFilename))
+        {
+            Debug.LogWarning("Rendering mode requires texture but none found in RAT data. Texture will be empty in .act file.");
+        }
+        
         using (var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write))
         using (var writer = new BinaryWriter(stream))
         {
             // Convert all RAT filenames to UTF-8 bytes with null terminators
+            // CRITICAL FIX: Ensure each filename is properly null-terminated and correctly extracted
             var ratFileNameBytes = new List<byte>();
+            
+            Debug.Log($"ACT Export: Writing {data.ratFilePaths.Count} RAT file references:");
+            
             foreach (string ratPath in data.ratFilePaths)
             {
-                byte[] pathBytes = Encoding.UTF8.GetBytes(ratPath + '\0');
+                // DIAGNOSTIC: Log the original path before processing
+                Debug.Log($"  - Original RAT path from data: '{ratPath}'");
+                
+                // Clean the path - ensure it's just the filename without directory prefixes
+                // Use Path.GetFileName which handles both Windows and Unix paths correctly
+                string cleanPath = Path.GetFileName(ratPath);
+                
+                // DIAGNOSTIC: Verify the extracted filename
+                Debug.Log($"  - Extracted filename: '{cleanPath}' (length: {cleanPath?.Length ?? 0})");
+                
+                // Additional safety check - if GetFileName returns empty, use the original path
+                if (string.IsNullOrEmpty(cleanPath))
+                {
+                    Debug.LogWarning($"  - Path.GetFileName returned empty! Using original path: '{ratPath}'");
+                    cleanPath = ratPath;
+                }
+                
+                // Convert to UTF-8 and add null terminator
+                byte[] pathBytes = Encoding.UTF8.GetBytes(cleanPath);
+                Debug.Log($"  - UTF-8 byte count: {pathBytes.Length}");
+                
                 ratFileNameBytes.AddRange(pathBytes);
+                ratFileNameBytes.Add(0); // Null terminator
             }
+            
             byte[] allRatFileNames = ratFileNameBytes.ToArray();
+            
+            // Debug: Log the actual bytes being written
+            Debug.Log($"ACT Export: RAT filenames blob size: {allRatFileNames.Length} bytes");
+            Debug.Log($"ACT Export: Hex dump of RAT filenames blob:");
+            StringBuilder hexDump = new StringBuilder();
+            StringBuilder asciiDump = new StringBuilder();
+            for (int i = 0; i < Mathf.Min(allRatFileNames.Length, 128); i++)
+            {
+                hexDump.AppendFormat("{0:X2} ", allRatFileNames[i]);
+                char c = (char)allRatFileNames[i];
+                asciiDump.Append(c >= 32 && c < 127 ? c.ToString() : (c == 0 ? "\\0" : "?"));
+            }
+            Debug.Log($"  Hex: {hexDump}");
+            Debug.Log($"  ASCII: {asciiDump}");
             
             // Convert texture filename to UTF-8 bytes
             byte[] textureFilenameBytes = Encoding.UTF8.GetBytes(meshData.textureFilename ?? "");
@@ -800,11 +1121,11 @@ public class Actor : MonoBehaviour
             uint textureFilenameOffset = meshIndicesOffset + (uint)(meshData.indices.Length * 2); // 2 bytes per index
             uint transformsOffset = textureFilenameOffset + (uint)textureFilenameBytes.Length;
             
-            // Create header (version 4 for embedded mesh data)
+            // Create header (version 5 for embedded mesh data and rendering mode)
             var header = new ActorHeader
             {
                 magic = 0x52544341, // 'ACTR'
-                version = 4, // Version 4 with embedded mesh data
+                version = 5, // Version 5 with embedded mesh data and rendering mode
                 num_rat_files = (uint)data.ratFilePaths.Count,
                 rat_filenames_length = (uint)allRatFileNames.Length,
                 num_keyframes = (uint)data.transforms.Count,
@@ -825,14 +1146,21 @@ public class Actor : MonoBehaviour
                 texture_filename_offset = textureFilenameOffset,
                 texture_filename_length = (uint)textureFilenameBytes.Length,
                 
-                reserved = new byte[8]
+                // Rendering mode
+                rendering_mode = (byte)renderingMode,
+                
+                reserved = new byte[7]
             };
             
             // Write header
             WriteStruct(writer, header);
             
-            // Write RAT filenames
-            writer.Write(allRatFileNames);
+            // Write RAT filenames blob
+            if (allRatFileNames.Length > 0)
+            {
+                writer.Write(allRatFileNames);
+                Debug.Log($"ACT Export: Wrote {allRatFileNames.Length} bytes of RAT filenames at offset {ratFilenamesOffset}");
+            }
             
             // Write mesh UV data
             foreach (var uv in meshData.uvs)
@@ -889,7 +1217,8 @@ public class Actor : MonoBehaviour
             }
         }
         
-        Debug.Log($"Saved Actor data (v4 with embedded mesh): {data.transforms.Count} keyframes, {meshData.uvs.Length} vertices");
+        Debug.Log($"Saved Actor data (v5 with embedded mesh and rendering mode): {data.transforms.Count} keyframes, {meshData.uvs.Length} vertices");
+        Debug.Log($"  - Rendering mode: {renderingMode}");
         Debug.Log($"  - Texture: {meshData.textureFilename}");
         Debug.Log($"  - RAT files: {string.Join(", ", data.ratFilePaths)}");
     }
@@ -899,129 +1228,8 @@ public class Actor : MonoBehaviour
     /// </summary>
     private static (Rat.VertexUV[] uvs, Rat.VertexColor[] colors, ushort[] indices, string textureFilename) ExtractMeshDataFromRatFiles(List<string> ratFilePaths)
     {
-        // Default mesh data to return if anything fails
-        var defaultData = (
-            uvs: new Rat.VertexUV[] { new Rat.VertexUV { u = 0, v = 0 } },
-            colors: new Rat.VertexColor[] { new Rat.VertexColor { r = 1, g = 1, b = 1, a = 1 } },
-            indices: new ushort[] { 0 },
-            textureFilename: ""
-        );
-        
-        if (ratFilePaths == null || ratFilePaths.Count == 0)
-        {
-            return defaultData;
-        }
-        
-        // Load the first RAT file to extract mesh data
-        string firstRatPath = ratFilePaths[0];
-        
-        if (string.IsNullOrEmpty(firstRatPath))
-        {
-            return defaultData;
-        }
-        
-        try
-        {
-            var animation = Rat.Core.ReadRatFile(firstRatPath);
-            
-            // Validate that all required fields are present
-            if (animation.uvs == null || animation.colors == null || animation.indices == null)
-            {
-                Debug.LogWarning($"Failed to extract mesh data from RAT file '{firstRatPath}': Missing required data");
-                return defaultData;
-            }
-            
-            return (animation.uvs, animation.colors, animation.indices, animation.texture_filename ?? "");
-        }
-        catch (System.Exception e)
-        {
-            Debug.LogWarning($"Failed to extract mesh data from RAT file '{firstRatPath}': {e.Message}");
-            return defaultData;
-        }
-    }
-    
-    /// <summary>
-    /// Loads actor animation data from a binary file with mesh data embedded (Version 4)
-    /// </summary>
-    public static ActorAnimationData LoadActorData(string filePath)
-    {
-        using (var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read))
-        using (var reader = new BinaryReader(stream))
-        {
-            // Read header
-            var header = ReadStruct<ActorHeader>(reader);
-            
-            // Validate magic number
-            if (header.magic != 0x52544341)
-            {
-                throw new System.Exception($"Invalid Actor file magic number: 0x{header.magic:X8}");
-            }
-            
-            var data = new ActorAnimationData
-            {
-                framerate = header.framerate
-            };
-            
-            if (header.version == 4)
-            {
-                // Version 4 format - embedded mesh data, 16-bit fixed-point
-                byte[] allRatFileNameBytes = reader.ReadBytes((int)header.rat_filenames_length);
-                string allRatFileNames = Encoding.UTF8.GetString(allRatFileNameBytes);
-                
-                string[] ratFileNames = allRatFileNames.Split('\0', StringSplitOptions.RemoveEmptyEntries);
-                data.ratFilePaths.AddRange(ratFileNames);
-                
-                Debug.Log($"Loading Actor file (v4) with {data.ratFilePaths.Count} RAT files and embedded mesh data");
-                
-                // Skip mesh data for now (UV, colors, indices) - the C engine will read these
-                // We could read them here if needed for Unity-side processing
-                
-                // Read texture filename
-                if (header.texture_filename_length > 0)
-                {
-                    reader.BaseStream.Seek(header.texture_filename_offset, SeekOrigin.Begin);
-                    byte[] textureBytes = reader.ReadBytes((int)header.texture_filename_length);
-                    string textureFilename = Encoding.UTF8.GetString(textureBytes);
-                    Debug.Log($"Texture filename: {textureFilename}");
-                }
-                
-                // Read fixed-point transforms and convert back to float
-                reader.BaseStream.Seek(header.transforms_offset, SeekOrigin.Begin);
-                for (int i = 0; i < header.num_keyframes; i++)
-                {
-                    var fixedTransform = ReadStruct<ActorTransform>(reader);
-                    
-                    var floatTransform = new ActorTransformFloat
-                    {
-                        position = new Vector3(
-                            Fixed16ToFloat(fixedTransform.position_x, header.position_min_x, header.position_max_x),
-                            Fixed16ToFloat(fixedTransform.position_y, header.position_min_y, header.position_max_y),
-                            Fixed16ToFloat(fixedTransform.position_z, header.position_min_z, header.position_max_z)
-                        ),
-                        rotation = new Vector3(
-                            Fixed16ToDegrees(fixedTransform.rotation_x),
-                            Fixed16ToDegrees(fixedTransform.rotation_y),
-                            Fixed16ToDegrees(fixedTransform.rotation_z)
-                        ),
-                        scale = new Vector3(
-                            Fixed16ToFloat(fixedTransform.scale_x, header.scale_min, header.scale_max),
-                            Fixed16ToFloat(fixedTransform.scale_y, header.scale_min, header.scale_max),
-                            Fixed16ToFloat(fixedTransform.scale_z, header.scale_min, header.scale_max)
-                        ),
-                        rat_file_index = fixedTransform.rat_file_index,
-                        rat_local_frame = fixedTransform.rat_local_frame
-                    };
-                    
-                    data.transforms.Add(floatTransform);
-                }
-            }
-            else
-            {
-                throw new System.Exception($"Unsupported Actor file version: {header.version}. Version 4 required for embedded mesh data.");
-            }
-            
-            return data;
-        }
+        // For now, just return empty data
+        return (new Rat.VertexUV[0], new Rat.VertexColor[0], new ushort[0], "");
     }
     
     /// <summary>
@@ -1033,15 +1241,12 @@ public class Actor : MonoBehaviour
         if (AnimationData == null || AnimationData.transforms.Count == 0)
             return;
             
-        // For now, since we don't have the actual RAT file frame counts,
-        // we'll assign all transforms to the first RAT file
-        // TODO: Update this when RatRecorder provides actual file splitting information
-        
+        // For now, assign all transforms to the first RAT file
         for (int i = 0; i < AnimationData.transforms.Count; i++)
         {
             var transform = AnimationData.transforms[i];
-            transform.rat_file_index = 0; // All frames go to first RAT file for now
-            transform.rat_local_frame = (uint)i; // Frame index within that RAT file
+            transform.rat_file_index = 0;
+            transform.rat_local_frame = (uint)i;
             AnimationData.transforms[i] = transform;
         }
         
@@ -1052,18 +1257,14 @@ public class Actor : MonoBehaviour
     /// Updates the Actor's RAT file references based on the files created by RatRecorder.
     /// Call this method after RatRecorder has completed its file creation.
     /// </summary>
-    /// <param name="createdRatFiles">List of RAT file paths created by RatRecorder</param>
-    /// <param name="framesPerFile">Number of frames in each RAT file</param>
     public void SetRatFileReferences(List<string> createdRatFiles, List<uint> framesPerFile)
     {
         if (AnimationData == null)
             return;
             
-        // Update the RAT file paths
         AnimationData.ratFilePaths.Clear();
         AnimationData.ratFilePaths.AddRange(createdRatFiles);
         
-        // Update transform data with correct RAT file and frame mappings
         uint globalFrameIndex = 0;
         
         for (int fileIndex = 0; fileIndex < framesPerFile.Count && fileIndex < createdRatFiles.Count; fileIndex++)
@@ -1087,7 +1288,6 @@ public class Actor : MonoBehaviour
     /// <summary>
     /// Sets the base filename for saving RAT and Actor files
     /// </summary>
-    /// <param name="filename">Base filename without extension</param>
     public void SetBaseFilename(string filename)
     {
         baseFilename = filename;
@@ -1113,7 +1313,6 @@ public class Actor : MonoBehaviour
             return;
         }
         
-        // Start the recording process
         StartTransformRecording();
         
         Debug.Log($"Actor '{name}': Starting combined RAT and Actor recording...");
@@ -1136,7 +1335,6 @@ public class Actor : MonoBehaviour
     /// <summary>
     /// Applies a specific keyframe's transform to this actor
     /// </summary>
-    /// <param name="keyframeIndex">The keyframe index to apply</param>
     public void ApplyKeyframe(uint keyframeIndex)
     {
         if (AnimationData == null || keyframeIndex >= AnimationData.transforms.Count)
@@ -1151,15 +1349,62 @@ public class Actor : MonoBehaviour
     
     /// <summary>
     /// Gets the current position which represents the model center for RAT calculations.
-    /// This is critical for your C engine to correctly transform vertices.
     /// </summary>
-    /// <returns>The current position (model center point)</returns>
     public Vector3 GetModelCenter()
     {
         return position;
     }
-    
-    public void CEngineMultiRatIntegrationDocumentation() { }
+
+#if UNITY_EDITOR
+    /// <summary>
+    /// Unity Editor validation - shows errors/warnings in Inspector and updates shader when rendering mode changes
+    /// </summary>
+    private void OnValidate()
+    {
+        // Only validate in editor mode
+        if (!Application.isPlaying)
+        {
+            var mr = GetComponent<MeshRenderer>();
+            var smr = GetComponent<SkinnedMeshRenderer>();
+            
+            if (mr == null && smr == null)
+            {
+                Debug.LogError($"Actor '{name}' requires either a MeshRenderer or SkinnedMeshRenderer component!", this);
+            }
+            
+            var anim = GetComponentInParent<Animator>();
+            if (anim == null)
+            {
+                Debug.LogWarning($"Actor '{name}' has no Animator in this GameObject or its parents. Consider adding one.", this);
+            }
+            
+            // Update shader when rendering mode changes in the Inspector
+            ValidateAndSetupComponents();
+            SetupShaderAndMaterial();
+        }
+    }
+#endif
+
+    /// <summary>
+    /// Helper method to write a struct to binary stream
+    /// </summary>
+    private static void WriteStruct<T>(BinaryWriter writer, T structData) where T : struct
+    {
+        int size = Marshal.SizeOf<T>();
+        byte[] bytes = new byte[size];
+        
+        IntPtr ptr = Marshal.AllocHGlobal(size);
+        try
+        {
+            Marshal.StructureToPtr(structData, ptr, false);
+            Marshal.Copy(ptr, bytes, 0, size);
+            writer.Write(bytes);
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(ptr);
+        }
+    }
     
     /// <summary>
     /// Validates that Actor and RAT data are synchronized for C engine compatibility.
@@ -1275,143 +1520,4 @@ public class Actor : MonoBehaviour
         
         return allFilesValid;
     }
-    
-    /// <summary>
-    /// Gets information about which RAT file and local frame a specific keyframe uses.
-    /// Useful for debugging and C engine integration.
-    /// </summary>
-    /// <param name="globalKeyframe">Global keyframe index (0-based)</param>
-    /// <returns>Tuple of (rat_file_index, rat_local_frame, rat_filename) or null if invalid</returns>
-    public (uint ratFileIndex, uint ratLocalFrame, string ratFileName)? GetRatFileInfoForKeyframe(uint globalKeyframe)
-    {
-        if (AnimationData == null || globalKeyframe >= AnimationData.transforms.Count)
-            return null;
-            
-        var transform = AnimationData.transforms[(int)globalKeyframe];
-        
-        if (transform.rat_file_index >= AnimationData.ratFilePaths.Count)
-            return null;
-            
-        string ratFileName = AnimationData.ratFilePaths[(int)transform.rat_file_index];
-        
-        return (transform.rat_file_index, transform.rat_local_frame, ratFileName);
-    }
-    
-    /// <summary>
-    /// Prints a summary of the RAT file mapping for debugging purposes.
-    /// </summary>
-    public void PrintRatFileMappingSummary()
-    {
-        if (AnimationData == null)
-        {
-            Debug.Log($"Actor '{name}': No animation data");
-            return;
-        }
-        
-        Debug.Log($"=== RAT File Mapping Summary for Actor '{name}' ===");
-        Debug.Log($"Total keyframes: {AnimationData.transforms.Count}");
-        Debug.Log($"RAT files referenced: {AnimationData.ratFilePaths.Count}");
-        
-        for (int i = 0; i < AnimationData.ratFilePaths.Count; i++)
-        {
-            Debug.Log($"  RAT File {i}: {AnimationData.ratFilePaths[i]}");
-        }
-        
-        // Show first few and last few keyframe mappings
-        int showCount = Mathf.Min(5, AnimationData.transforms.Count);
-        
-        Debug.Log($"First {showCount} keyframe mappings:");
-        for (int i = 0; i < showCount; i++)
-        {
-            var info = GetRatFileInfoForKeyframe((uint)i);
-            if (info.HasValue)
-            {
-                Debug.Log($"  Keyframe {i}: RAT file {info.Value.ratFileIndex}, local frame {info.Value.ratLocalFrame} ({Path.GetFileName(info.Value.ratFileName)})");
-            }
-        }
-        
-        if (AnimationData.transforms.Count > showCount * 2)
-        {
-            Debug.Log($"... (skipping middle keyframes) ...");
-            
-            Debug.Log($"Last {showCount} keyframe mappings:");
-            for (int i = AnimationData.transforms.Count - showCount; i < AnimationData.transforms.Count; i++)
-            {
-                var info = GetRatFileInfoForKeyframe((uint)i);
-                if (info.HasValue)
-                {
-                    Debug.Log($"  Keyframe {i}: RAT file {info.Value.ratFileIndex}, local frame {info.Value.ratLocalFrame} ({Path.GetFileName(info.Value.ratFileName)})");
-                }
-            }
-        }
-        
-        Debug.Log("=== End RAT File Mapping Summary ===");
-    }
-    
-    /// <summary>
-    /// Helper method to write a struct to binary stream
-    /// </summary>
-    private static void WriteStruct<T>(BinaryWriter writer, T structData) where T : struct
-    {
-        int size = Marshal.SizeOf<T>();
-        byte[] bytes = new byte[size];
-        
-        IntPtr ptr = Marshal.AllocHGlobal(size);
-        try
-        {
-            Marshal.StructureToPtr(structData, ptr, false);
-            Marshal.Copy(ptr, bytes, 0, size);
-            writer.Write(bytes);
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(ptr);
-        }
-    }
-    
-    /// <summary>
-    /// Helper method to read a struct from binary stream
-    /// </summary>
-    private static T ReadStruct<T>(BinaryReader reader) where T : struct
-    {
-        int size = Marshal.SizeOf<T>();
-        byte[] bytes = reader.ReadBytes(size);
-        
-        IntPtr ptr = Marshal.AllocHGlobal(size);
-        try
-        {
-            Marshal.Copy(bytes, 0, ptr, size);
-            return Marshal.PtrToStructure<T>(ptr);
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(ptr);
-        }
-    }
-
-#if UNITY_EDITOR
-    /// <summary>
-    /// Unity Editor validation - shows errors/warnings in Inspector
-    /// </summary>
-    private void OnValidate()
-    {
-        // Only validate in editor mode
-        if (!Application.isPlaying)
-        {
-            var mr = GetComponent<MeshRenderer>();
-            var smr = GetComponent<SkinnedMeshRenderer>();
-            
-            if (mr == null && smr == null)
-            {
-                Debug.LogError($"Actor '{name}' requires either a MeshRenderer or SkinnedMeshRenderer component!", this);
-            }
-            
-            var anim = GetComponentInParent<Animator>();
-            if (anim == null)
-            {
-                Debug.LogWarning($"Actor '{name}' has no Animator in this GameObject or its parents. Consider adding one.", this);
-            }
-        }
-    }
-#endif
 }

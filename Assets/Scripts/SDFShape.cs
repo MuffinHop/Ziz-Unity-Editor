@@ -100,14 +100,17 @@ public class SDFShape : MonoBehaviour
     {
         if (_renderTexture != null && _renderTexture.IsCreated())
         {
-            // Create a temporary black texture to clear with
-            RenderTexture tempRT = RenderTexture.GetTemporary(_renderTexture.width, _renderTexture.height, 0, _renderTexture.format);
-            RenderTexture.active = tempRT;
-            GL.Clear(true, true, Color.clear);
+            // Save current RenderTexture state
+            RenderTexture previousRT = RenderTexture.active;
             
-            // Copy the cleared texture to our render texture
-            Graphics.Blit(tempRT, _renderTexture);
-            RenderTexture.ReleaseTemporary(tempRT);
+            // Set our texture as the active render target
+            RenderTexture.active = _renderTexture;
+            
+            // Clear the texture completely with transparent black
+            GL.Clear(true, true, new Color(0, 0, 0, 0));
+            
+            // Restore previous RenderTexture state
+            RenderTexture.active = previousRT;
         }
     }
 
@@ -124,9 +127,11 @@ public class SDFShape : MonoBehaviour
             // Update material properties
             UpdateSDFMaterialProperties(_sdfMaterial);
             
-            // Clear the texture before rendering new content
+            // Clear the texture completely before rendering new content
+            // This ensures no artifacts or previous shapes bleed through
             ClearRenderTexture();
             
+            // Wait a frame to ensure clear completes before rendering
             // Render directly to texture using Graphics.Blit
             Graphics.Blit(null, _renderTexture, _sdfMaterial);
         }
@@ -227,6 +232,76 @@ public class SDFShape : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// Gets platform-appropriate texture size based on target platform settings.
+    /// N64 is limited to 64x64, all other platforms can use up to 256x256.
+    /// </summary>
+    public static void GetPlatformTextureSize(int requestedWidth, int requestedHeight, out int actualWidth, out int actualHeight)
+    {
+        actualWidth = requestedWidth;
+        actualHeight = requestedHeight;
+        
+        // N64 has strict 64x64 limit
+        if (targetPlatform == "N64")
+        {
+            int maxN64Size = 64;
+            if (requestedWidth > maxN64Size || requestedHeight > maxN64Size)
+            {
+                Debug.LogWarning($"[N64] Texture size {requestedWidth}x{requestedHeight} exceeds N64 limit. Clamping to {maxN64Size}x{maxN64Size}.");
+                actualWidth = Mathf.Min(requestedWidth, maxN64Size);
+                actualHeight = Mathf.Min(requestedHeight, maxN64Size);
+            }
+        }
+        else
+        {
+            // All other platforms: 256x256 max
+            int maxStandardSize = 256;
+            if (requestedWidth > maxStandardSize || requestedHeight > maxStandardSize)
+            {
+                Debug.LogWarning($"[{targetPlatform}] Texture size {requestedWidth}x{requestedHeight} exceeds platform limit. Clamping to {maxStandardSize}x{maxStandardSize}.");
+                actualWidth = Mathf.Min(requestedWidth, maxStandardSize);
+                actualHeight = Mathf.Min(requestedHeight, maxStandardSize);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Ensures the texture is exported at the platform-appropriate size.
+    /// Call this before exporting RAT files to guarantee the texture exists.
+    /// </summary>
+    public void EnsureTextureExported()
+    {
+        if (_sdfMaterial == null)
+        {
+            UpdateMaterial();
+        }
+        
+        // Export at the appropriate resolution for the current platform
+        int width, height;
+        switch (emulatedResolution)
+        {
+            case SDFEmulatedResolution.Tex512x512:
+                width = height = 512;
+                break;
+            case SDFEmulatedResolution.Tex256x256:
+                width = height = 256;
+                break;
+            case SDFEmulatedResolution.Tex128x64:
+                width = 128;
+                height = 64;
+                break;
+            default:
+                width = height = 256;
+                break;
+        }
+        
+        // Apply platform-specific size limits
+        GetPlatformTextureSize(width, height, out int actualWidth, out int actualHeight);
+        
+        // Save the texture at the clamped size
+        SaveRenderTextureToPNG(actualWidth, actualHeight, recyclePreviousShapes);
+    }
+
     private void RenderToPNG() {
         // Simplified, robust exporter supporting multiple sizes.
         switch (emulatedResolution)
@@ -266,6 +341,12 @@ public class SDFShape : MonoBehaviour
         RenderTexture buffer = RenderTexture.GetTemporary(width, height, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
         try
         {
+            // Clear the buffer completely before rendering
+            RenderTexture previousRT = RenderTexture.active;
+            RenderTexture.active = buffer;
+            GL.Clear(true, true, new Color(0, 0, 0, 0));
+            RenderTexture.active = previousRT;
+            
             // Render the SDF into the buffer using the SDF material
             Graphics.Blit(null, buffer, _sdfMaterial);
 
@@ -562,6 +643,12 @@ public class SDFShape : MonoBehaviour
         {
             if (state == PlayModeStateChange.ExitingPlayMode)
             {
+                // Auto-export all shapes to RATs when exiting play mode
+                if (frameTransforms.Count > 0)
+                {
+                    Debug.Log("Exiting play mode - auto-exporting SDF shapes to RAT files...");
+                    ExportAllShapesToRATs(autoExport: true);
+                }
                 frameTransforms.Clear();
             }
         }
@@ -618,7 +705,12 @@ public class SDFShape : MonoBehaviour
     [MenuItem("Ziz/Export All Shapes to RATs")]
     public static void ExportAllShapesToRATs()
     {
-        if (!EditorApplication.isPlaying)
+        ExportAllShapesToRATs(autoExport: false);
+    }
+
+    private static void ExportAllShapesToRATs(bool autoExport = false)
+    {
+        if (!autoExport && !EditorApplication.isPlaying)
         {
             EditorUtility.DisplayDialog("Error", "This function must be run in play mode.", "OK");
             return;
@@ -627,11 +719,14 @@ public class SDFShape : MonoBehaviour
         var allShapes = FindObjectsOfType<SDFShape>();
         if (allShapes.Length == 0)
         {
-            EditorUtility.DisplayDialog("Info", "No SDFShape objects found in the scene.", "OK");
+            if (!autoExport)
+            {
+                EditorUtility.DisplayDialog("Info", "No SDFShape objects found in the scene.", "OK");
+            }
             return;
         }
 
-        string outputDir = System.IO.Path.Combine(GetGeneratedDataPath(), "ShapeAnims");
+        string outputDir = GetGeneratedDataPath();
         if (string.IsNullOrEmpty(outputDir))
         {
             return;
@@ -641,29 +736,35 @@ public class SDFShape : MonoBehaviour
             System.IO.Directory.CreateDirectory(outputDir);
         }
 
-        // Group shapes by their deterministic texture filename
-        var shapesByTexture = allShapes
+        // Group shapes by their GameObject name (not by texture filename)
+        var shapesByName = allShapes
             .Where(s => s.emulatedResolution != SDFEmulatedResolution.None)
-            .GroupBy(s => {
-                int w = 0, h = 0;
-                switch (s.emulatedResolution)
-                {
-                    case SDFEmulatedResolution.Tex512x512: w = h = 512; break;
-                    case SDFEmulatedResolution.Tex256x256: w = h = 256; break;
-                    case SDFEmulatedResolution.Tex128x64: w = 128; h = 64; break;
-                }
-                return s.BuildOutputFilename(w, h);
-            });
+            .GroupBy(s => s.gameObject.name);
 
-        Debug.Log($"Found {shapesByTexture.Count()} unique shape textures to process.");
+        Debug.Log($"Found {shapesByName.Count()} unique shape GameObjects to process.");
 
-        foreach (var group in shapesByTexture)
+        foreach (var group in shapesByName)
         {
-            string texturePath = group.Key;
+            string gameObjectName = group.Key;
             SDFShape representative = group.First();
             Mesh quadMesh = representative.GetComponent<MeshFilter>().sharedMesh;
 
-            Debug.Log($"Processing shape group for texture: {System.IO.Path.GetFileName(texturePath)} ({group.Count()} instances)");
+            // Ensure the texture is actually exported (texture filename is detailed/deterministic)
+            representative.EnsureTextureExported();
+
+            // Get the detailed texture filename
+            int w = 0, h = 0;
+            switch (representative.emulatedResolution)
+            {
+                case SDFEmulatedResolution.Tex512x512: w = h = 512; break;
+                case SDFEmulatedResolution.Tex256x256: w = h = 256; break;
+                case SDFEmulatedResolution.Tex128x64: w = 128; h = 64; break;
+            }
+            GetPlatformTextureSize(w, h, out int actualWidth, out int actualHeight);
+            string detailedTexturePath = representative.BuildOutputFilename(actualWidth, actualHeight);
+            string detailedTextureFilename = System.IO.Path.GetFileName(detailedTexturePath);
+
+            Debug.Log($"Processing shape '{gameObjectName}' using detailed texture: {detailedTextureFilename} ({group.Count()} instance(s))");
 
             List<Vector3[]> allFramesVertices = new List<Vector3[]>();
             int vertexCount = quadMesh.vertexCount;
@@ -709,25 +810,57 @@ public class SDFShape : MonoBehaviour
 
             if (allFramesVertices.Count > 0)
             {
-                // Use the texture filename (without extension) as the base for the RAT file
-                string baseRatFilename = System.IO.Path.GetFileNameWithoutExtension(texturePath);
+                // Use GameObject name as the base for RAT files (in ShapeAnims subdirectory)
+                string baseRatFilename = gameObjectName;
                 string ratOutputPath = System.IO.Path.Combine(outputDir, baseRatFilename);
 
-                // We pass null for static UVs and colors because for SDFShapes,
-                // the UVs are constant (a simple quad) and colors are handled by the texture.
-                // The compression function will fall back to using the mesh's default UVs.
+                // Compress and create RAT files
                 Rat.CompressedAnimation anim = Rat.Tool.CompressFromFrames(allFramesVertices, quadMesh, null, null);
                 
                 if (anim != null)
                 {
-                    // Assign the mesh and texture filenames for the V3 format
+                    // Assign the mesh and detailed texture filenames for the V3 format
                     anim.mesh_data_filename = $"{baseRatFilename}.ratmesh";
-                    anim.texture_filename = System.IO.Path.GetFileName(texturePath);
+                    anim.texture_filename = detailedTextureFilename; // Use detailed texture name
 
                     // Use the size-splitting writer
                     List<string> createdFiles = Rat.Tool.WriteRatFileWithSizeSplitting(ratOutputPath, anim);
                     
-                    Debug.Log($"Successfully exported {createdFiles.Count} file(s) for shape group '{baseRatFilename}'.");
+                    Debug.Log($"Successfully exported {createdFiles.Count} RAT file(s) for shape '{gameObjectName}'.");
+                    
+                    // Create .act file for this shape using GameObject name
+                    ActorAnimationData actorData = new ActorAnimationData();
+                    actorData.framerate = exportFrameRate; // Use the configured export framerate
+                    
+                    // Add all RAT files to the actor data
+                    foreach (string ratFile in createdFiles.Where(f => f.EndsWith(".rat")))
+                    {
+                        actorData.ratFilePaths.Add(System.IO.Path.GetFileName(ratFile));
+                    }
+                    
+                    // Create transform keyframes for each frame
+                    for (int i = 0; i < allFramesVertices.Count; i++)
+                    {
+                        // For SDF shapes, we use identity transforms since the vertex animation
+                        // already contains the transformed positions
+                        ActorTransformFloat transform = new ActorTransformFloat
+                        {
+                            position = Vector3.zero,
+                            rotation = Vector3.zero,
+                            scale = Vector3.one,
+                            rat_file_index = 0,
+                            rat_local_frame = (uint)i
+                        };
+                        actorData.transforms.Add(transform);
+                    }
+                    
+                    // Save .act file to ROOT GeneratedData directory using GameObject name
+                    string actFilePath = System.IO.Path.Combine(GetGeneratedDataPath(), $"{gameObjectName}.act");
+                    Actor.SaveActorData(actFilePath, actorData, ActorRenderingMode.TextureOnly);
+                    
+                    Debug.Log($"Created .act file for shape '{gameObjectName}': {actFilePath}");
+                    Debug.Log($"  - RAT files: {string.Join(", ", createdFiles.Select(f => System.IO.Path.GetFileName(f)))}");
+                    Debug.Log($"  - Texture: {detailedTextureFilename}");
                 }
             }
         }

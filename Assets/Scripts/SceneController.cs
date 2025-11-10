@@ -4,6 +4,10 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System;
 using System.Linq;
+#if UNITY_EDITOR
+using UnityEditor;
+using UnityEditor.SceneManagement;
+#endif
 
 /// <summary>
 /// Binary file header for Scene data files (.scn)
@@ -20,29 +24,46 @@ public struct SceneHeader
     public uint keyframes_offset;   // Offset to keyframe data array
     
     [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)]
-    public byte[] reserved;         // Reserved for future use
+    public byte[] reserved;         // Reserved for future use (matching C struct)
 }
 
 /// <summary>
-/// Component reference data
+/// Keyframe state data for scene timeline
+/// </summary>
+[System.Serializable]
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+public struct SceneKeyframeData
+{
+    public float timestamp;                           // Time in seconds from start of recording
+    [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)]
+    public bool[] activeComponentIndices;             // Bit-packed as bools in C# for clarity
+    
+    public SceneKeyframeData(float time, int componentCount)
+    {
+        timestamp = time;
+        activeComponentIndices = new bool[componentCount];
+    }
+}
+
+/// <summary>
+/// Component data for scene tracking (binary format - must be struct for marshaling)
 /// </summary>
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
-public struct SceneComponent
+public struct SceneComponentData
 {
-    public byte component_type;     // 0=Camera, 1=Actor, 2=Level
+    public byte component_type;     // 0=Camera, 1=Actor, 2=Level, 3=Shape
     public ushort component_id;     // Unique ID for this component instance
     [MarshalAs(UnmanagedType.ByValArray, SizeConst = 64)]
     public byte[] component_name;   // UTF-8 name (null-terminated)
-    [MarshalAs(UnmanagedType.ByValArray, SizeConst = 64)]
+    [MarshalAs(UnmanagedType.ByValArray, SizeConst = 256)]
     public byte[] file_path;        // UTF-8 file path (null-terminated)
 }
 
 /// <summary>
-/// State keyframe for all components at a specific time
-/// Uses bit-packed activation states for memory efficiency
+/// Keyframe state for scene timeline (binary format - must be struct for marshaling)
 /// </summary>
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
-public struct SceneKeyframe
+public struct SceneKeyframeHeaderData
 {
     public float timestamp;         // Time in seconds from recording start
     public uint active_mask_count;  // Number of uint32 masks that follow
@@ -67,26 +88,30 @@ public struct SceneKeyframeFloat
 }
 
 /// <summary>
+/// Component type enumeration (must be outside SceneController for use in other scripts)
+/// Matches C enum values exactly for binary compatibility
+/// </summary>
+public enum ComponentType
+{
+    Camera = 0,  // Must be 0
+    Actor = 1,   // Must be 1
+    Level = 2,   // Must be 2
+    Shape = 3    // Must be 3
+}
+
+/// <summary>
 /// SceneController manages activation/deactivation of cameras, actors, and levels
 /// and exports this data to a binary format for C engine integration
 /// </summary>
 public class SceneController : MonoBehaviour
 {
-    public enum ComponentType
-    {
-        Camera = 0,
-        Actor = 1,
-        Level = 2,
-        Shape = 3 // New component type for SDF Shapes
-    }
-
     [System.Serializable]
     public class TrackedComponent
     {
         public ComponentType type;
         public ushort id;
         public byte[] name = new byte[64];
-        public byte[] filePath = new byte[64];
+        public byte[] filePath = new byte[256];
         public GameObject obj;
         public MonoBehaviour component;
         public bool wasActive;
@@ -98,7 +123,7 @@ public class SceneController : MonoBehaviour
             this.type = type;
             this.id = id;
             this.name = SceneController.PadAndTruncate(name, 64);
-            this.filePath = SceneController.PadAndTruncate(path, 64);
+            this.filePath = SceneController.PadAndTruncate(path, 256);
             this.wasActive = component.gameObject.activeSelf;
         }
 
@@ -121,7 +146,7 @@ public class SceneController : MonoBehaviour
     [Header("Recording Settings")]
     public string sceneName = "scene";
     public float recordingFPS = 30f;
-    public bool logStateChanges = true; // If true, only records when a component's state changes
+    public bool logStateChanges = false; // If true, only records when a component's state changes
 
     [Header("Debug Info")]
     [SerializeField] private bool isRecording = false;
@@ -131,6 +156,11 @@ public class SceneController : MonoBehaviour
     private List<TrackedComponent> trackedComponents = new List<TrackedComponent>();
     private List<SceneKeyframeFloat> keyframes = new List<SceneKeyframeFloat>();
     private float lastRecordTime = 0f;
+
+    private const uint SCENE_FILE_MAGIC = 0x454E4353;  // "SCNE"
+    private const uint SCENE_FILE_VERSION = 1;
+    private const int MAX_COMPONENT_NAME_LENGTH = 64;
+    private const int MAX_COMPONENT_PATH_LENGTH = 256;
 
     private static byte[] PadAndTruncate(string str, int length)
     {
@@ -152,11 +182,21 @@ public class SceneController : MonoBehaviour
 
     void Start()
     {
-        if (isRecording)
-        {
-            StartRecording();
-        }
+        StartRecording();
     }
+
+#if UNITY_EDITOR
+    private void OnEnable()
+    {
+    }
+
+    private void OnDisable()
+    {
+        StopRecording();
+        FileLogger.Close();
+    }
+
+#endif
 
     void Update()
     {
@@ -172,16 +212,40 @@ public class SceneController : MonoBehaviour
         }
     }
 
+    void OnGUI()
+    {
+        GUILayout.BeginArea(new Rect(10, 10, 300, 150));
+        GUILayout.Box("Scene Controller", GUILayout.Width(280));
+        
+        GUILayout.BeginHorizontal();
+        if (GUILayout.Button("Start Recording", GUILayout.Height(40)))
+        {
+            StartRecording();
+        }
+        if (GUILayout.Button("Stop Recording", GUILayout.Height(40)))
+        {
+            StopRecording();
+        }
+        GUILayout.EndHorizontal();
+        
+        GUILayout.Label($"Recording: {(isRecording ? "YES" : "NO")}");
+        GUILayout.Label($"Keyframes: {keyframeCount}");
+        
+        GUILayout.EndArea();
+    }
+
     [ContextMenu("Start Recording")]
     public void StartRecording()
     {
+        FileLogger.Initialize();
+        
         if (isRecording)
         {
-            Debug.LogWarning("Scene recording is already in progress.");
+            FileLogger.LogWarning("Scene recording is already in progress.");
             return;
         }
 
-        Debug.Log("=== SCENE RECORDING STARTED ===");
+        FileLogger.LogSection("SCENE RECORDING STARTED");
         isRecording = true;
         recordingStartTime = Time.time;
         lastRecordTime = Time.time;
@@ -199,7 +263,7 @@ public class SceneController : MonoBehaviour
     {
         if (!isRecording)
         {
-            Debug.LogWarning("Scene recording is not in progress.");
+            FileLogger.LogWarning("Scene recording is not in progress.");
             return;
         }
 
@@ -213,7 +277,8 @@ public class SceneController : MonoBehaviour
             SaveSceneFile();
         }
         
-        Debug.Log("=== SCENE RECORDING STOPPED ===");
+        FileLogger.LogSection("SCENE RECORDING STOPPED");
+        FileLogger.Flush();
     }
     
     /// <summary>
@@ -267,10 +332,11 @@ public class SceneController : MonoBehaviour
         Actor[] actors = FindObjectsOfType<Actor>();
         foreach (var actor in actors)
         {
-            // Use the base filename to create a chunk-independent reference.
-            // The C-engine will be responsible for finding all _partXXofYY.rat files.
-            string baseRatPath = actor.BaseFilename + ".rat";
-            trackedComponents.Add(new TrackedComponent(actor, actor.gameObject.name, baseRatPath, ComponentType.Actor, currentId++));
+            // Actors reference .act files (which contain transform and RAT file references)
+            string actPath = actor.BaseFilename + ".act";
+            trackedComponents.Add(new TrackedComponent(actor, actor.gameObject.name, actPath, ComponentType.Actor, currentId++));
+            
+            Debug.Log($"Actor '{actor.gameObject.name}': Scene file will reference '{actPath}'");
         }
 
         // Find all Level components
@@ -281,48 +347,52 @@ public class SceneController : MonoBehaviour
             trackedComponents.Add(new TrackedComponent(level, levelName, level.outputFileName, ComponentType.Level, currentId++));
         }
 
-        // New: Find all SDFShape components
-        SDFShape[] shapes = FindObjectsOfType<SDFShape>();
-        var shapesByTexture = shapes
+        // Find all SDFShape components (NOT in particle systems)
+        SDFShape[] allShapes = FindObjectsOfType<SDFShape>();
+        var nonParticleShapes = allShapes.Where(s => s.GetComponent<SDFParticleRecorder>() == null).ToList();
+        
+        var shapesByName = nonParticleShapes
             .Where(s => s.emulatedResolution != SDFEmulatedResolution.None)
-            .GroupBy(s => {
-                int w = 0, h = 0;
-                switch (s.emulatedResolution)
-                {
-                    case SDFEmulatedResolution.Tex512x512: w = h = 512; break;
-                    case SDFEmulatedResolution.Tex256x256: w = h = 256; break;
-                    case SDFEmulatedResolution.Tex128x64: w = 128; h = 64; break;
-                }
-                return s.BuildOutputFilename(w, h);
-            });
+            .GroupBy(s => s.gameObject.name);
 
-        foreach (var group in shapesByTexture)
+        foreach (var group in shapesByName)
         {
-            // All shapes in the group share the same texture and rat file.
-            // We only need to add one component to the scene file to represent the whole group.
             SDFShape representative = group.First();
-            string texturePath = group.Key; // This is the .png path
             
-            // Derive the base .rat filename from the texture path.
-            // This creates a chunk-independent reference.
-            string baseRatFilename = Path.ChangeExtension(Path.GetFileName(texturePath), ".rat");
+            // SDFShapes reference .act files in the root GeneratedData directory
+            // The .act file is created by the ExportAllShapesToRATs function
+            string actPath = $"{representative.gameObject.name}.act";
             
-            // We track the base rat file; the C engine will derive the .ratmesh and texture names from it.
-            trackedComponents.Add(new TrackedComponent(representative, representative.gameObject.name, baseRatFilename, ComponentType.Shape, currentId++));
+            Debug.Log($"Shape '{representative.gameObject.name}': Scene file will reference '{actPath}'");
+            
+            trackedComponents.Add(new TrackedComponent(representative, representative.gameObject.name, actPath, ComponentType.Shape, currentId++));
+        }
+
+        // Find all SDFParticleRecorder components
+        SDFParticleRecorder[] particleRecorders = FindObjectsOfType<SDFParticleRecorder>();
+        foreach (var recorder in particleRecorders)
+        {
+            // Particle systems reference their base filename .act files
+            string actPath = $"{recorder.baseFilename}.act";
+            trackedComponents.Add(new TrackedComponent(recorder, recorder.gameObject.name, actPath, ComponentType.Actor, currentId++));
+            
+            Debug.Log($"Particle System '{recorder.gameObject.name}': Scene file will reference '{actPath}'");
         }
         
         // Sort by ID to ensure consistent order
         trackedComponents.Sort((a, b) => a.id.CompareTo(b.id));
+        
+        Debug.Log($"SceneController: Initialized {trackedComponents.Count} tracked components");
     }
 
     /// <summary>
-    /// Saves the recorded scene data to a binary file
+    /// Saves the recorded scene data to a binary file and prints detailed export information
     /// </summary>
     private void SaveSceneFile()
     {
         string path = Path.Combine(Application.dataPath, "..", "GeneratedData", sceneName + ".scn");
+        Debug.Log("Attempting to save scene file to: " + path);
         Directory.CreateDirectory(Path.GetDirectoryName(path));
-
         try
         {
             using (FileStream fs = new FileStream(path, FileMode.Create))
@@ -331,8 +401,8 @@ public class SceneController : MonoBehaviour
                 // --- Write Header ---
                 SceneHeader header = new SceneHeader
                 {
-                    magic = 0x454E4353, // "SCNE"
-                    version = 1,
+                    magic = SCENE_FILE_MAGIC,      // 'SCNE'
+                    version = SCENE_FILE_VERSION,    // Version 1
                     num_components = (uint)trackedComponents.Count,
                     num_keyframes = (uint)keyframes.Count,
                     framerate = recordingFPS,
@@ -340,7 +410,7 @@ public class SceneController : MonoBehaviour
                 };
                 
                 // Calculate offsets after header and component data
-                uint componentDataSize = (uint)(Marshal.SizeOf(typeof(SceneComponent)) * trackedComponents.Count);
+                uint componentDataSize = (uint)(Marshal.SizeOf(typeof(SceneComponentData)) * trackedComponents.Count);
                 header.keyframes_offset = (uint)Marshal.SizeOf(typeof(SceneHeader)) + componentDataSize;
 
                 WriteStructure(writer, header);
@@ -348,7 +418,7 @@ public class SceneController : MonoBehaviour
                 // --- Write Component Info ---
                 foreach (var comp in trackedComponents)
                 {
-                    SceneComponent sc = new SceneComponent
+                    SceneComponentData sc = new SceneComponentData
                     {
                         component_type = (byte)comp.type,
                         component_id = comp.id,
@@ -371,7 +441,7 @@ public class SceneController : MonoBehaviour
                         }
                     }
 
-                    SceneKeyframe sk = new SceneKeyframe
+                    SceneKeyframeHeaderData sk = new SceneKeyframeHeaderData
                     {
                         timestamp = keyframe.timestamp,
                         active_mask_count = (uint)numMasks
@@ -386,11 +456,156 @@ public class SceneController : MonoBehaviour
             }
             
             Debug.Log($"Scene saved to {path}");
+            
+            // Print detailed export information
+            PrintSceneFileDetails(path);
         }
         catch (Exception e)
         {
             Debug.LogError($"Failed to save scene file: {e.Message}");
         }
+    }
+
+    /// <summary>
+    /// Prints comprehensive details about the exported .scn file to the console
+    /// </summary>
+    private void PrintSceneFileDetails(string filePath)
+    {
+        FileLogger.Initialize();
+        FileLogger.LogSection("SCENE FILE EXPORT COMPLETE - DETAILED SUMMARY");
+        
+        FileInfo fileInfo = new FileInfo(filePath);
+        float recordingDuration = keyframes.Count > 0 ? keyframes[keyframes.Count - 1].timestamp : 0f;
+
+        // File Information
+        FileLogger.LogSection("FILE INFORMATION");
+        FileLogger.Log($"  File Path:              {filePath}");
+        FileLogger.Log($"  File Size:              {fileInfo.Length:N0} bytes ({fileInfo.Length / 1024.0:F2} KB)");
+        FileLogger.Log($"  File Name:              {fileInfo.Name}");
+        
+        // Header Information
+        FileLogger.LogSection("HEADER STRUCTURE (64 bytes)");
+        FileLogger.Log($"  Magic Number:           0x454E4353 (\"SCNE\")");
+        FileLogger.Log($"  Version:                1");
+        FileLogger.Log($"  Total Components:       {trackedComponents.Count}");
+        FileLogger.Log($"  Total Keyframes:        {keyframes.Count}");
+        FileLogger.Log($"  Recording Framerate:    {recordingFPS} FPS");
+        FileLogger.Log($"  Keyframes Offset:       {Marshal.SizeOf(typeof(SceneHeader)) + (uint)(Marshal.SizeOf(typeof(SceneComponentData)) * trackedComponents.Count)} bytes");
+        
+        // Component Information
+        FileLogger.LogSection($"TRACKED COMPONENTS ({trackedComponents.Count} components)");
+        FileLogger.Log($"  Component Entry Size:   {Marshal.SizeOf(typeof(SceneComponentData))} bytes");
+        FileLogger.Log($"  Total Component Data:   {trackedComponents.Count * Marshal.SizeOf(typeof(SceneComponentData)):N0} bytes");
+        FileLogger.Log("");
+        
+        for (int i = 0; i < trackedComponents.Count; i++)
+        {
+            var comp = trackedComponents[i];
+            string typeName = comp.type switch
+            {
+                ComponentType.Camera => "Camera",
+                ComponentType.Actor => "Actor",
+                ComponentType.Level => "Level",
+                ComponentType.Shape => "SDF Shape",
+                _ => "Unknown"
+            };
+            
+            FileLogger.Log($"  [{i}] {typeName} \"{comp.GetName()}\"");
+            FileLogger.Log($"      ID: {comp.id}");
+            FileLogger.Log($"      File Path: {System.Text.Encoding.UTF8.GetString(comp.filePath).TrimEnd('\0')}");
+        }
+        
+        // Keyframe Information
+        FileLogger.LogSection($"KEYFRAME DATA ({keyframes.Count} keyframes)");
+        
+        int numMasks = (trackedComponents.Count + 31) / 32;
+        uint keyframeDataSize = (uint)keyframes.Count * (8 + (uint)numMasks * 4);
+        
+        FileLogger.Log($"  Activation Mask Count:  {numMasks} uint32(s) per keyframe");
+        FileLogger.Log($"  Keyframe Struct Size:   8 bytes (timestamp + mask_count)");
+        FileLogger.Log($"  Mask Data Size:         {numMasks * 4} bytes per keyframe");
+        FileLogger.Log($"  Total Keyframe Data:    {keyframeDataSize:N0} bytes");
+        FileLogger.Log($"  Recording Duration:     {recordingDuration:F3} seconds");
+        FileLogger.Log($"  Time Per Frame:         {(recordingDuration / keyframes.Count):F4} seconds");
+        
+        // Show first few keyframes
+        FileLogger.Log("");
+        FileLogger.Log("  First 5 Keyframes:");
+        for (int i = 0; i < Mathf.Min(5, keyframes.Count); i++)
+        {
+            var kf = keyframes[i];
+            
+            string activeComponents = "";
+            for (int c = 0; c < trackedComponents.Count; c++)
+            {
+                if (kf.componentStates[c])
+                {
+                    activeComponents += $"{c} ";
+                }
+            }
+            
+            FileLogger.Log($"    [{i}] Time: {kf.timestamp:F3}s | Active Components: [{activeComponents.Trim()}]");
+        }
+        
+        if (keyframes.Count > 10)
+        {
+            FileLogger.Log($"    ... ({keyframes.Count - 10} more keyframes) ...");
+        }
+        
+        // File Structure Layout
+        FileLogger.LogSection("BINARY FILE LAYOUT");
+        long headerSize = Marshal.SizeOf(typeof(SceneHeader));
+        long componentSize = trackedComponents.Count * Marshal.SizeOf(typeof(SceneComponentData));
+        long keyframesSize = keyframeDataSize;
+        long totalCalculated = headerSize + componentSize + keyframesSize;
+        
+        FileLogger.Log($"  Offset 0x00:            Header ({headerSize} bytes)");
+        FileLogger.Log($"  Offset 0x{headerSize:X2}:            Components ({componentSize:N0} bytes, {trackedComponents.Count} entries × {Marshal.SizeOf(typeof(SceneComponentData))} bytes each)");
+        FileLogger.Log($"  Offset 0x{headerSize + componentSize:X2}:            Keyframes ({keyframesSize:N0} bytes, {keyframes.Count} entries)");
+        FileLogger.Log($"  Total Calculated:       {totalCalculated:N0} bytes");
+        FileLogger.Log($"  Actual File Size:       {fileInfo.Length:N0} bytes");
+        FileLogger.Log($"  Match:                  {(totalCalculated == fileInfo.Length ? "✓ YES" : "✗ NO")}");
+        
+        // Memory Efficiency
+        FileLogger.LogSection("COMPRESSION & EFFICIENCY");
+        float bitsPerComponent = (keyframes.Count * numMasks * 32) / (float)trackedComponents.Count;
+        float compressionRatio = 1.0f - (fileInfo.Length / (float)(keyframes.Count * trackedComponents.Count * 4));
+        
+        FileLogger.Log($"  Bits per Component per Frame: {bitsPerComponent:F1}");
+        FileLogger.Log($"  Compression Ratio:      {(1.0f - compressionRatio) * 100:F1}% reduction from uncompressed");
+        FileLogger.Log($"  Bytes per Keyframe:     {fileInfo.Length / (float)keyframes.Count:F1}");
+        
+        // Component References
+        FileLogger.LogSection("REFERENCED ASSET FILES");
+        HashSet<string> referencedFiles = new HashSet<string>();
+        
+        for (int i = 0; i < trackedComponents.Count; i++)
+        {
+            string filePath_component = System.Text.Encoding.UTF8.GetString(trackedComponents[i].filePath).TrimEnd('\0');
+            if (!string.IsNullOrEmpty(filePath_component))
+            {
+                referencedFiles.Add(filePath_component);
+            }
+        }
+        
+        foreach (var file in referencedFiles.OrderBy(f => f))
+        {
+            FileLogger.Log($"  - {file}");
+        }
+        
+        // Summary Statistics
+        FileLogger.LogSection("SUMMARY STATISTICS");
+        FileLogger.Log($"  Total Components:       {trackedComponents.Count}");
+        FileLogger.Log($"  Total Keyframes:        {keyframes.Count}");
+        FileLogger.Log($"  Recording Duration:     {recordingDuration:F2} seconds");
+        FileLogger.Log($"  Framerate:              {recordingFPS} FPS");
+        FileLogger.Log($"  File Size:              {fileInfo.Length / 1024.0:F2} KB");
+        FileLogger.Log($"  Data Density:           {fileInfo.Length / (float)(keyframes.Count * trackedComponents.Count):F2} bytes per component-frame");
+        
+        FileLogger.LogSection("STATUS");
+        FileLogger.Log("Ready for C Engine Integration!");
+        
+        FileLogger.Flush();
     }
 
     /// <summary>

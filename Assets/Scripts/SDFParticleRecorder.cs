@@ -75,8 +75,7 @@ public class SDFParticleRecorder : MonoBehaviour
     [Tooltip("Only record when particle system is visible by any camera.")]
     public bool onlyRecordWhenVisible = true;
 
-    [Header("Export Settings")]
-    [Tooltip("Base filename for generated .rat and .act files.")]
+    [Tooltip("Base filename for exported .rat and .act files (defaults to GameObject name).")]
     public string baseFilename = "particle_system";
 
     [Tooltip("Maximum file size in KB before splitting into multiple parts.")]
@@ -129,6 +128,7 @@ public class SDFParticleRecorder : MonoBehaviour
 
     void Awake()
     {
+        baseFilename = gameObject.name;
         if (targetParticleSystem == null)
         {
             targetParticleSystem = GetComponent<ParticleSystem>();
@@ -197,6 +197,7 @@ public class SDFParticleRecorder : MonoBehaviour
 
     void Start()
     {
+        baseFilename = gameObject.name;
         // Create SDF shape template for texture generation (or recreate if needed)
         if (_sdfShapeTemplate == null)
         {
@@ -369,7 +370,6 @@ public class SDFParticleRecorder : MonoBehaviour
                     _particleRenderer.sharedMaterial = particleMaterial;
                 }
                 
-                Debug.Log($"SDFParticleRecorder: Applied SDF texture to particle system material");
             }
             else
             {
@@ -409,7 +409,6 @@ public class SDFParticleRecorder : MonoBehaviour
             // Reapply to particle system
             ApplySDFMaterialToParticleSystem();
             
-            Debug.Log($"SDFParticleRecorder: Updated SDF settings ({particleShapeType}, {shapeResolution})");
         }
     }
 
@@ -435,7 +434,6 @@ public class SDFParticleRecorder : MonoBehaviour
         _lastCaptureTime = Time.time;
         _isRecording = true;
 
-        Debug.Log($"SDFParticleRecorder: Started recording at {captureFramerate} FPS (will record until play mode exits)");
     }
 
     /// <summary>
@@ -469,10 +467,6 @@ public class SDFParticleRecorder : MonoBehaviour
 
         _recordedFrames.Add(frameData);
 
-        if (_recordedFrames.Count % 30 == 0) // Log every 30 frames
-        {
-            Debug.Log($"SDFParticleRecorder: Captured frame {_recordedFrames.Count} with {particleCount} particles");
-        }
     }
 
     /// <summary>
@@ -493,8 +487,6 @@ public class SDFParticleRecorder : MonoBehaviour
         }
 
         _isRecording = false;
-
-        Debug.Log($"SDFParticleRecorder: Recording stopped. Captured {_recordedFrames.Count} frames.");
         
         if (_recordedFrames.Count == 0)
         {
@@ -620,15 +612,17 @@ public class SDFParticleRecorder : MonoBehaviour
                 break;
         }
 
-        string textureFilename = _sdfShapeTemplate != null 
-            ? Path.GetFileName(_sdfShapeTemplate.BuildOutputFilename(width, height))
-            : $"sdf_{particleShapeType.ToString().ToLower()}_{width}x{height}.png";
+        // Apply platform-specific texture size limits
+        SDFShape.GetPlatformTextureSize(width, height, out int actualWidth, out int actualHeight);
 
-        // Ensure the SDF texture PNG is generated
+        string textureFilename = _sdfShapeTemplate != null 
+            ? Path.GetFileName(_sdfShapeTemplate.BuildOutputFilename(actualWidth, actualHeight))
+            : $"sdf_{particleShapeType.ToString().ToLower()}_{actualWidth}x{actualHeight}.png";
+
+        // Ensure the SDF texture PNG is generated at the platform-appropriate size
         if (_sdfShapeTemplate != null)
         {
-            _sdfShapeTemplate.UpdateMaterial();
-            // The texture should be automatically generated when the shape is rendered
+            _sdfShapeTemplate.EnsureTextureExported();
         }
 
         Debug.Log($"SDFParticleRecorder: Using texture: {textureFilename}");
@@ -662,7 +656,8 @@ public class SDFParticleRecorder : MonoBehaviour
             Directory.CreateDirectory(generatedDataPath);
         }
 
-        List<string> createdRatFiles = Rat.Tool.WriteRatFileWithSizeSplitting(baseFilename, compressed, maxFileSizeKB);
+        string baseFilePath = Path.Combine(generatedDataPath, baseFilename);
+        List<string> createdRatFiles = Rat.Tool.WriteRatFileWithSizeSplitting(baseFilePath, compressed, maxFileSizeKB);
 
         Debug.Log($"SDFParticleRecorder: Created {createdRatFiles.Count} file(s):");
         foreach (string file in createdRatFiles)
