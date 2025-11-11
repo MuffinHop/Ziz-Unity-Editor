@@ -32,6 +32,24 @@ namespace ZizSceneEditor.Assets.Scripts.Shapes
         [HideInInspector, SerializeField] private int _lastLatitudeSegments;
         [HideInInspector, SerializeField] private float _lastRadius;
 
+        // Animation recording data
+        private bool isRecordingAnimation = false;
+        private float recordingStartTime;
+        private List<Mesh> animationFrames = new List<Mesh>();
+        private List<TransformData> frameTransforms = new List<TransformData>();
+        public float animationFramerate = 30f;
+
+        /// <summary>
+        /// Stores transform data for a single frame
+        /// </summary>
+        [System.Serializable]
+        private struct TransformData
+        {
+            public Vector3 position;
+            public Vector3 rotation; // Euler angles
+            public Vector3 scale;
+        }
+
         /// <summary>
         /// Context menu hook so you can right-click the component and choose Generate Skybox in the inspector.
         /// </summary>
@@ -453,20 +471,15 @@ namespace ZizSceneEditor.Assets.Scripts.Shapes
                 actorData.ratFilePaths.Add(System.IO.Path.GetFileName(ratFile));
             }
             
-            // Create a single transform keyframe using the SkyBox's actual transform
-            ActorTransformFloat transform = new ActorTransformFloat
-            {
-                position = new Vector3(this.transform.position.x, this.transform.position.y, -this.transform.position.z), // Flip Z for right-handed coordinates
-                rotation = this.transform.eulerAngles,
-                scale = this.transform.lossyScale,
-                rat_file_index = 0,
-                rat_local_frame = 0
-            };
-            actorData.transforms.Add(transform);
+            // Extract mesh data
+            actorData.meshUVs = uvs;
+            actorData.meshColors = colors ?? new Color[mesh.vertexCount];
+            actorData.meshIndices = mesh.triangles;
+            actorData.textureFilename = "";
             
             // Save .act file to root GeneratedData directory
             string actFilePath = System.IO.Path.Combine(generatedDataPath, $"{gameObject.name}.act");
-            Actor.SaveActorData(actFilePath, actorData, ActorRenderingMode.VertexColoursOnly, embedMeshData: false);
+            Actor.SaveActorData(actFilePath, actorData, Rat.ActorRenderingMode.VertexColoursOnly, embedMeshData: true);
             
             Debug.Log($"SkyBox: Created .act file: {actFilePath}");
             Debug.Log($"  - RAT files: {string.Join(", ", createdFiles.Select(f => System.IO.Path.GetFileName(f)))}");
@@ -519,5 +532,89 @@ namespace ZizSceneEditor.Assets.Scripts.Shapes
         }
     }
 #endif
+
+    /// <summary>
+    /// Exports the skybox animation to RAT and ACT files
+    /// </summary>
+    public void ExportAnimation()
+    {
+        if (animationFrames.Count == 0)
+        {
+            Debug.LogError("SkyBox: No animation frames to export!");
+            return;
+        }
+
+        string baseFilename = gameObject.name;
+
+        // Convert recorded transforms to ActorTransformFloat format
+        var actorTransforms = frameTransforms.Select((t, index) => new Rat.ActorTransformFloat
+        {
+            position = t.position,
+            rotation = t.rotation,
+            scale = t.scale,
+            rat_file_index = 0,
+            rat_local_frame = (uint)index
+        }).ToList();
+
+        try
+        {
+            // Collect transform data and vertex frames for export
+            List<Rat.ActorTransformFloat> allFramesTransforms = new List<Rat.ActorTransformFloat>();
+            List<Vector3[]> allFramesVertices = new List<Vector3[]>();
+            
+            // Get the mesh from MeshFilter
+            var meshFilter = GetComponent<MeshFilter>();
+            if (meshFilter == null || meshFilter.sharedMesh == null)
+            {
+                Debug.LogError("SkyBox: No mesh found to export!");
+                return;
+            }
+            
+            var mesh = meshFilter.sharedMesh;
+            
+            // For now, create a single frame from the current mesh state
+            if (mesh != null && mesh.vertexCount > 0)
+            {
+                allFramesVertices.Add(mesh.vertices);
+                
+                allFramesTransforms.Add(new Rat.ActorTransformFloat
+                {
+                    position = transform.position,
+                    rotation = transform.eulerAngles,
+                    scale = transform.localScale,
+                    rat_file_index = 0,
+                    rat_local_frame = 0
+                });
+                
+                string baseRatFilename = gameObject.name;
+                float captureFramerate = 30f; // Default framerate
+
+                Rat.Tool.ExportAnimation(
+                    baseRatFilename,
+                    allFramesVertices,
+                    mesh,
+                    null,
+                    null,
+                    captureFramerate,
+                    "",  // No texture filename - vertex colours only
+                    64,  // maxFileSizeKB
+                    Rat.ActorRenderingMode.VertexColoursOnly,  // Changed to VertexColoursOnly
+                    allFramesTransforms  // Pass transforms
+                );
+                
+                Debug.Log($"SkyBox: Exported mesh with vertex colours and transforms baked into vertices");
+            }
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"SkyBox: Export failed - {e.Message}");
+        }
+
+        // Clean up
+        foreach (var frameMesh in animationFrames)
+            UnityEngine.Object.Destroy(frameMesh);
+        animationFrames.Clear();
+        frameTransforms.Clear();
     }
+}
 }

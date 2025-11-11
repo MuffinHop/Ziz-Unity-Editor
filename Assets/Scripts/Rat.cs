@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Collections.Generic;
+using System.Linq; 
 
 namespace Rat
 {
@@ -357,48 +358,6 @@ namespace Rat
         }
         
         /// <summary>
-        /// DEPRECATED: Mesh data is now embedded in .act files (version 5).
-        /// This method is kept for backward compatibility but should not be used.
-        /// </summary>
-        [Obsolete("Mesh data is now embedded in .act files. This method is deprecated.")]
-        public static void WriteRatMeshFile(Stream stream, CompressedAnimation anim)
-        {
-            using (var writer = new BinaryWriter(stream))
-            {
-                uint headerSize = (uint)Marshal.SizeOf(typeof(RatMeshHeader));
-                uint uvSize = anim.num_vertices * (uint)Marshal.SizeOf(typeof(VertexUV));
-                uint colorSize = anim.num_vertices * (uint)Marshal.SizeOf(typeof(VertexColor));
-                uint indicesSize = anim.num_indices * sizeof(ushort);
-                byte[] textureFilenameBytes = System.Text.Encoding.UTF8.GetBytes(anim.texture_filename ?? "");
-
-                var header = new RatMeshHeader
-                {
-                    magic = 0x4D544152, // "RATM"
-                    num_vertices = anim.num_vertices,
-                    num_indices = anim.num_indices,
-                    uv_offset = headerSize,
-                    color_offset = headerSize + uvSize,
-                    indices_offset = headerSize + uvSize + colorSize,
-                    texture_filename_offset = headerSize + uvSize + colorSize + indicesSize,
-                    texture_filename_length = (uint)textureFilenameBytes.Length,
-                    reserved = new byte[16]
-                };
-
-                byte[] headerBytes = new byte[headerSize];
-                IntPtr ptr = Marshal.AllocHGlobal((int)headerSize);
-                Marshal.StructureToPtr(header, ptr, false);
-                Marshal.Copy(ptr, headerBytes, 0, (int)headerSize);
-                Marshal.FreeHGlobal(ptr);
-                writer.Write(headerBytes);
-
-                foreach (var uv in anim.uvs) { writer.Write(uv.u); writer.Write(uv.v); }
-                foreach (var color in anim.colors) { writer.Write(color.r); writer.Write(color.g); writer.Write(color.b); writer.Write(color.a); }
-                foreach (var index in anim.indices) { writer.Write(index); }
-                if (textureFilenameBytes.Length > 0) writer.Write(textureFilenameBytes);
-            }
-        }
-
-        /// <summary>
         /// Internal method to write RAT3 format. Use WriteRatFile() instead.
         /// </summary>
         private static void WriteRatFileV3(Stream stream, CompressedAnimation anim, string meshDataFilename)
@@ -637,12 +596,19 @@ namespace Rat
         
         /// <summary>
         /// Compress animation data from frames with static UV and color data.
+        /// 
+        /// IMPORTANT: This method expects vertex frames that already have transforms applied!
+        /// The bounding box is calculated from the INPUT frames and stored in the RAT header.
+        /// During playback, vertices are quantized to 8-bit (0-255) and scaled into this bounding box.
+        /// 
+        /// Pipeline:
+        /// 1. Input: Vertex frames (already transformed via matrix multiplication in ExportAnimation)
+        /// 2. Calculate bounds from all frames
+        /// 3. Quantize vertices to 8-bit using bounds: quantized = (vertex - min) / (max - min) * 255
+        /// 4. Calculate per-vertex delta encoding bit widths
+        /// 5. Store in RAT: bounds, bit widths, first frame, delta stream
+        /// 6. On playback: dequantize using bounds: vertex = min + (quantized / 255) * (max - min)
         /// </summary>
-        /// <param name="rawFrames">Vertex position data per frame</param>
-        /// <param name="sourceMesh">Source mesh for fallback UV/color data and indices</param>
-        /// <param name="staticUVs">Static UV data (null for source mesh UVs)</param>
-        /// <param name="staticColors">Static color data (null for source mesh colors)</param>
-        /// <returns>Compressed animation data</returns>
         public static CompressedAnimation CompressFromFrames(
             List<UnityEngine.Vector3[]> rawFrames,
             UnityEngine.Mesh sourceMesh,
@@ -657,10 +623,10 @@ namespace Rat
             uint numFrames = (uint)rawFrames.Count;
             uint numIndices = (uint)sourceMesh.triangles.Length;
 
-            // Get triangle indices for use throughout the method
             var sourceIndices = sourceMesh.triangles;
 
-            // 1. Find animation bounds - Manual calculation to avoid Unity Bounds quirks
+            // 1. Calculate animation bounds from ALL frames (including transforms)
+            // These bounds will be stored in the RAT header and used for dequantization
             UnityEngine.Vector3 minBounds = rawFrames[0][0];
             UnityEngine.Vector3 maxBounds = rawFrames[0][0];
             
@@ -677,10 +643,10 @@ namespace Rat
                 }
             }
             
-            // Debug: Log the calculated bounds
-            UnityEngine.Debug.Log($"Compression bounds: Min({minBounds.x:F3}, {minBounds.y:F3}, {minBounds.z:F3}) Max({maxBounds.x:F3}, {maxBounds.y:F3}, {maxBounds.z:F3})");
+            UnityEngine.Debug.Log($"Compression bounds (from transformed frames): Min({minBounds.x:F3}, {minBounds.y:F3}, {minBounds.z:F3}) Max({maxBounds.x:F3}, {maxBounds.y:F3}, {maxBounds.z:F3})");
 
-            // 2. Quantize frames to 8-bit
+            // 2. Quantize ALL frames to 8-bit using the calculated bounds
+            // This maps the bounding box to 0-255 for each axis independently
             var quantizedFrames = new VertexU8[numFrames][];
             var range = maxBounds - minBounds;
             if (range.x == 0) range.x = 1;
@@ -692,6 +658,7 @@ namespace Rat
                 quantizedFrames[f] = new VertexU8[numVertices];
                 for (int v = 0; v < numVertices; v++)
                 {
+                    // Map vertex from world space into 0-255 quantized space using bounds
                     quantizedFrames[f][v].x = (byte)UnityEngine.Mathf.RoundToInt(255 * ((rawFrames[f][v].x - minBounds.x) / range.x));
                     quantizedFrames[f][v].y = (byte)UnityEngine.Mathf.RoundToInt(255 * ((rawFrames[f][v].y - minBounds.y) / range.y));
                     quantizedFrames[f][v].z = (byte)UnityEngine.Mathf.RoundToInt(255 * ((rawFrames[f][v].z - minBounds.z) / range.z));
@@ -797,7 +764,8 @@ namespace Rat
                 anim.delta_stream = Array.Empty<uint>();
             }
             
-            UnityEngine.Debug.Log($"Final stored bounds: Min({anim.min_x:F3}, {anim.min_y:F3}, {anim.min_z:F3}) Max({anim.max_x:F3}, {anim.max_y:F3}, {anim.max_z:F3})");
+            UnityEngine.Debug.Log($"Final RAT bounds: Min({anim.min_x:F3}, {anim.min_y:F3}, {anim.min_z:F3}) Max({anim.max_x:F3}, {anim.max_y:F3}, {anim.max_z:F3})");
+            UnityEngine.Debug.Log($"Quantization range: X({range.x:F3}) Y({range.y:F3}) Z({range.z:F3})");
             
             return anim;
         }
@@ -974,5 +942,181 @@ namespace Rat
             
             return anim;
         }
+
+        /// <summary>
+        /// Convenience method for GLBToRAT-style frame compression.
+        /// Converts Vector3 frames directly to compressed animation.
+        /// </summary>
+        public static CompressedAnimation CompressFramesFromVectors(
+            List<UnityEngine.Vector3[]> allFramesVertices,
+            ushort[] allIndices,
+            UnityEngine.Vector2[] allUVs,
+            UnityEngine.Color[] allColors,
+            string textureFilename = null,
+            string meshDataFilename = null)
+        {
+            if (allFramesVertices == null || allFramesVertices.Count == 0)
+                throw new ArgumentException("No vertex data provided.");
+
+            // Convert to mesh-based compression
+            var dummyMesh = new UnityEngine.Mesh();
+            dummyMesh.vertices = allFramesVertices[0];
+            dummyMesh.triangles = allIndices.Select(i => (int)i).ToArray();
+            dummyMesh.uv = allUVs;
+
+            var compressed = CompressFromFrames(allFramesVertices, dummyMesh, allUVs, allColors);
+            compressed.texture_filename = textureFilename ?? "";
+            compressed.mesh_data_filename = meshDataFilename ?? "";
+            return compressed;
+        }
+
+        /// <summary>
+        /// Unified export pipeline: compress vertex animation with transforms baked into vertices, and save as RAT + ACT files.
+        /// 
+        /// CRITICAL FLOW:
+        /// 1. Receives vertex frames (local space) + transform keyframes per frame
+        /// 2. Applies transform matrix to EVERY vertex in EVERY frame
+        ///    - Position: object-to-world translation
+        ///    - Rotation: object-to-world rotation
+        ///    - Scale: object-to-world scale
+        /// 3. Resulting vertices are in WORLD SPACE with all animation baked in
+        /// 4. Calls CompressFromFrames with transformed vertex data
+        /// 5. CompressFromFrames calculates bounds from transformed data
+        /// 6. Vertices quantized to 8-bit using these bounds
+        /// 7. RAT file stores: bounds (float) + quantized vertices + delta stream
+        /// 8. ACT file stores: mesh data + RAT file references (identity transforms only)
+        /// 
+        /// Result: RAT file is completely self-contained with all spatial data
+        /// </summary>
+        public static void ExportAnimation(
+            string baseFilename,
+            List<UnityEngine.Vector3[]> vertexFrames,
+            UnityEngine.Mesh sourceMesh,
+            UnityEngine.Vector2[] capturedUVs,
+            UnityEngine.Color[] capturedColors,
+            float framerate,
+            string textureFilename = "",
+            int maxFileSizeKB = 64,
+            ActorRenderingMode renderingMode = ActorRenderingMode.TextureWithDirectionalLight,
+            List<ActorTransformFloat> customTransforms = null)
+        {
+            if (vertexFrames == null || vertexFrames.Count == 0)
+            {
+                UnityEngine.Debug.LogError("ExportAnimation: No vertex frames provided");
+                return;
+            }
+
+            // STEP 1: Apply transforms to vertices
+            // This converts from local space to world space with all animation baked in
+            List<UnityEngine.Vector3[]> processedFrames = vertexFrames;
+            if (customTransforms != null && customTransforms.Count == vertexFrames.Count)
+            {
+                UnityEngine.Debug.Log($"ExportAnimation: Baking {customTransforms.Count} transform frames into vertex animation...");
+                processedFrames = new List<UnityEngine.Vector3[]>();
+                
+                for (int frameIndex = 0; frameIndex < vertexFrames.Count; frameIndex++)
+                {
+                    var transformData = customTransforms[frameIndex];
+                    
+                    // Build transform matrix: position, rotation, scale
+                    UnityEngine.Matrix4x4 transformMatrix = UnityEngine.Matrix4x4.TRS(
+                        transformData.position,
+                        UnityEngine.Quaternion.Euler(transformData.rotation),
+                        transformData.scale
+                    );
+                    
+                    // Apply to all vertices in this frame
+                    var transformedVertices = new UnityEngine.Vector3[vertexFrames[frameIndex].Length];
+                    for (int vertexIndex = 0; vertexIndex < vertexFrames[frameIndex].Length; vertexIndex++)
+                    {
+                        transformedVertices[vertexIndex] = transformMatrix.MultiplyPoint3x4(vertexFrames[frameIndex][vertexIndex]);
+                    }
+                    
+                    processedFrames.Add(transformedVertices);
+                }
+                UnityEngine.Debug.Log($"ExportAnimation: Transform baking complete - vertices now in world space");
+            }
+            else if (customTransforms == null)
+            {
+                UnityEngine.Debug.Log($"ExportAnimation: No transforms provided - vertices assumed to be in world space");
+            }
+
+            // STEP 2: Compress vertex animation
+            // This will:
+            // - Calculate bounds from transformed frames
+            // - Quantize to 8-bit using bounds
+            // - Store bounds in RAT header
+            var compressed = CompressFromFrames(processedFrames, sourceMesh, capturedUVs, capturedColors);
+            if (compressed == null)
+            {
+                UnityEngine.Debug.LogError("ExportAnimation: Compression failed");
+                return;
+            }
+
+            compressed.texture_filename = textureFilename;
+            compressed.mesh_data_filename = $"{baseFilename}.ratmesh";
+
+            // Create GeneratedData directory
+            string generatedDataPath = System.IO.Path.Combine(UnityEngine.Application.dataPath.Replace("Assets", ""), "GeneratedData");
+            if (!System.IO.Directory.Exists(generatedDataPath))
+            {
+                System.IO.Directory.CreateDirectory(generatedDataPath);
+            }
+
+            // STEP 3: Write RAT files
+            // Contains: bounds (float) + bit widths + first frame + delta stream
+            // ALL vertex animation is baked in, ready for direct rendering
+            string baseFilePath = System.IO.Path.Combine(generatedDataPath, baseFilename);
+            var ratFiles = WriteRatFileWithSizeSplitting(baseFilePath, compressed, maxFileSizeKB);
+
+            // STEP 4: Create ACT file
+            // Contains: mesh data (UVs, colors, indices) + RAT file references
+            // Transform data is identity-only since all animation is in vertices
+            var actorData = new ActorAnimationData();
+            actorData.framerate = framerate;
+            actorData.ratFilePaths.AddRange(ratFiles.ConvertAll(System.IO.Path.GetFileName));
+            
+            // Extract mesh data from source mesh
+            actorData.meshUVs = capturedUVs ?? sourceMesh.uv;
+            actorData.meshColors = capturedColors ?? sourceMesh.colors;
+            actorData.meshIndices = sourceMesh.triangles;
+            actorData.textureFilename = textureFilename;
+
+            string actFilePath = System.IO.Path.Combine(generatedDataPath, $"{baseFilename}.act");
+            Actor.SaveActorData(actFilePath, actorData, renderingMode, embedMeshData: true);
+            
+            UnityEngine.Debug.Log($"ExportAnimation: Complete");
+            UnityEngine.Debug.Log($"  RAT files ({ratFiles.Count}): Bounds={compressed.min_x:F2}-{compressed.max_x:F2}, {compressed.min_y:F2}-{compressed.max_y:F2}, {compressed.min_z:F2}-{compressed.max_z:F2}");
+            UnityEngine.Debug.Log($"  Vertices: {compressed.num_vertices}, Frames: {compressed.num_frames}");
+            UnityEngine.Debug.Log($"  ACT file: Mesh data + RAT references (all transforms baked into RAT vertex data)");
+        }
+    }
+
+    /// <summary>
+    /// Material and rendering mode options for Actor rendering
+    /// </summary>
+    public enum ActorRenderingMode
+    {
+        VertexColoursOnly,
+        VertexColoursWithDirectionalLight,
+        VertexColoursWithVertexLighting,
+        TextureOnly,
+        TextureAndVertexColours,
+        TextureWithDirectionalLight,
+        TextureAndVertexColoursAndDirectionalLight,
+        MatCap
+    }
+
+    /// <summary>
+    /// Floating-point transform data used during recording (before compression)
+    /// </summary>
+    [System.Serializable]
+    public struct ActorTransformFloat
+    {
+        public UnityEngine.Vector3 position;        // World position (represents model center)
+        public UnityEngine.Vector3 rotation;        // World rotation (Euler angles in degrees)
+        public UnityEngine.Vector3 scale;           // World scale
+        public uint rat_file_index;     // Index into the RAT file list (0-based)
+        public uint rat_local_frame;    // Frame index within the specific RAT file
     }
 }

@@ -499,8 +499,7 @@ public class SDFParticleRecorder : MonoBehaviour
     }
 
     /// <summary>
-    /// Exports recorded particle data to .act and .rat files
-    /// Each particle becomes a vertex-animated quad using the SDF shape texture
+    /// Exports recorded particle data to .act and .rat files with transforms baked into vertices
     /// </summary>
     private void ExportToActAndRat()
     {
@@ -626,92 +625,49 @@ public class SDFParticleRecorder : MonoBehaviour
         }
 
         Debug.Log($"SDFParticleRecorder: Using texture: {textureFilename}");
-        Debug.Log($"SDFParticleRecorder: Total vertices: {totalVertices}, Frames: {frameVertices.Count}");
 
-        // Compress animation using RAT compression
-        string meshDataFilename = $"{baseFilename}.ratmesh";
-        Rat.CompressedAnimation compressed;
+        // Create a dummy mesh with the quad topology
+        Mesh quadMesh = new Mesh();
+        quadMesh.vertices = new Vector3[totalVertices];
+        quadMesh.triangles = indices.Select(i => (int)i).ToArray();
+        quadMesh.uv = uvs;
+
+        // Bake transforms into frame data
+        List<Rat.ActorTransformFloat> frameTransforms = new List<Rat.ActorTransformFloat>();
+        foreach (var frame in _recordedFrames)
+        {
+            frameTransforms.Add(new Rat.ActorTransformFloat
+            {
+                position = transform.position,
+                rotation = transform.eulerAngles,
+                scale = transform.localScale,
+                rat_file_index = 0,
+                rat_local_frame = (uint)frameTransforms.Count
+            });
+        }
 
         try
         {
-            compressed = Rat.CommandLine.GLBToRAT.CompressFrames(
+            // Use unified export API with transforms to be baked
+            Rat.Tool.ExportAnimation(
+                baseFilename,
                 frameVertices,
-                indices,
+                quadMesh,
                 uvs,
                 colors,
+                captureFramerate,
                 $"assets/{textureFilename}",
-                meshDataFilename
+                maxFileSizeKB,
+                Rat.ActorRenderingMode.TextureWithDirectionalLight,
+                frameTransforms  // Pass transforms
             );
+            
+            Debug.Log($"SDFParticleRecorder: Export complete - transforms baked into vertices");
         }
         catch (System.Exception e)
         {
-            Debug.LogError($"SDFParticleRecorder: Compression failed: {e.Message}");
-            return;
+            Debug.LogError($"SDFParticleRecorder: Export failed - {e.Message}");
         }
-
-        // Write RAT files with size splitting
-        string generatedDataPath = Path.Combine(Application.dataPath.Replace("/Assets", ""), "GeneratedData");
-        if (!Directory.Exists(generatedDataPath))
-        {
-            Directory.CreateDirectory(generatedDataPath);
-        }
-
-        string baseFilePath = Path.Combine(generatedDataPath, baseFilename);
-        List<string> createdRatFiles = Rat.Tool.WriteRatFileWithSizeSplitting(baseFilePath, compressed, maxFileSizeKB);
-
-        Debug.Log($"SDFParticleRecorder: Created {createdRatFiles.Count} file(s):");
-        foreach (string file in createdRatFiles)
-        {
-            Debug.Log($"  - {file}");
-        }
-
-        // Filter out .ratmesh file - only keep .rat animation files for Actor
-        List<string> ratAnimationFiles = createdRatFiles.Where(f => f.EndsWith(".rat")).ToList();
-
-        // Create Actor animation data
-        ActorAnimationData actorData = new ActorAnimationData();
-        actorData.framerate = captureFramerate;
-        actorData.ratFilePaths.AddRange(ratAnimationFiles.ConvertAll(path => Path.GetFileName(path)));
-
-        // Create transform keyframes (particle system is stationary, but we need frame mapping)
-        uint globalFrame = 0;
-        uint currentFileIndex = 0;
-        uint localFrameIndex = 0;
-        uint framesPerFile = ratAnimationFiles.Count > 0 ? compressed.num_frames / (uint)ratAnimationFiles.Count : compressed.num_frames;
-
-        for (int i = 0; i < _recordedFrames.Count; i++)
-        {
-            // Calculate which RAT file this frame belongs to
-            if (localFrameIndex >= framesPerFile && currentFileIndex < ratAnimationFiles.Count - 1)
-            {
-                currentFileIndex++;
-                localFrameIndex = 0;
-            }
-
-            ActorTransformFloat transform = new ActorTransformFloat
-            {
-                position = new Vector3(this.transform.position.x, this.transform.position.y, -this.transform.position.z), // Flip Z for right-handed coordinates
-                rotation = this.transform.eulerAngles,
-                scale = this.transform.lossyScale,
-                rat_file_index = currentFileIndex,
-                rat_local_frame = localFrameIndex
-            };
-
-            actorData.transforms.Add(transform);
-            
-            globalFrame++;
-            localFrameIndex++;
-        }
-
-        // Save .act file
-        string actFilePath = Path.Combine(generatedDataPath, $"{baseFilename}.act");
-        Actor.SaveActorData(actFilePath, actorData);
-
-        Debug.Log($"SDFParticleRecorder: Export complete!");
-        Debug.Log($"  - ACT file: {actFilePath}");
-        Debug.Log($"  - Total keyframes: {actorData.transforms.Count}");
-        Debug.Log($"  - Max particles: {maxParticles}");
-        Debug.Log($"  - Texture: {textureFilename}");
     }
 
     void OnDestroy()

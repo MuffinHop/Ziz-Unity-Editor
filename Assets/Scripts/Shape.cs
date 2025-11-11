@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq; // Add this
 using UnityEngine;
 
 /// <summary>
@@ -40,22 +41,28 @@ public abstract class Shape : MonoBehaviour
     [Tooltip("Framerate for animation recording")]
     public float animationFramerate = 30f;
 
-    [Header("Export Settings")]
-    [Tooltip("Base filename for generated .rat and .act files (auto-generated from transform name if empty).")]
-    public string baseFilename = "";
-    
-    [Tooltip("Automatically generate .rat and .act files when the shape changes.")]
-    public bool autoExportForCEngine = true;
-
     // Animation recording data
     private bool isRecordingAnimation = false;
     private float recordingStartTime;
     private List<Mesh> animationFrames = new List<Mesh>();
+    private List<TransformData> frameTransforms = new List<TransformData>();
     private List<float> frameTimestamps = new List<float>();
 
-    protected Mesh mesh; // cached mesh instance
+    /// <summary>
+    /// Stores transform data for a single frame
+    /// </summary>
+    [System.Serializable]
+    private struct TransformData
+    {
+        public Vector3 position;
+        public Vector3 rotation; // Euler angles
+        public Vector3 scale;
+    }
+
+    public Mesh mesh; // Changed from 'protected' to 'public'
     static Material _defaultVertexColorMat;
     private string lastTransformName = "";
+    private string baseFilename = ""; // Add this field
 
     /// <summary> Called to (re)build the shape's mesh data. Implement per shape. </summary>
     protected abstract void BuildMesh(Mesh target);
@@ -129,24 +136,6 @@ public abstract class Shape : MonoBehaviour
         if (autoRebuild && Application.isEditor && !Application.isPlaying)
         {
             Rebuild();
-            
-            // Auto-export for C engine if enabled
-            if (autoExportForCEngine)
-            {
-                UpdateBaseFilename();
-                ExportForCEngine();
-            }
-        }
-    }
-    
-    private void UpdateBaseFilename()
-    {
-        // Auto-generate filename from transform name if not set
-        if (string.IsNullOrEmpty(baseFilename) || transform.name != lastTransformName)
-        {
-            string cleanName = System.Text.RegularExpressions.Regex.Replace(transform.name, @"[<>:""/\\|?*]", "_");
-            baseFilename = cleanName;
-            lastTransformName = transform.name;
         }
     }
     
@@ -172,6 +161,7 @@ public abstract class Shape : MonoBehaviour
         isRecordingAnimation = true;
         recordingStartTime = Time.time;
         animationFrames.Clear();
+        frameTransforms.Clear();
         frameTimestamps.Clear();
 
         Debug.Log($"Shape '{name}': Started animation recording at {animationFramerate} FPS");
@@ -210,14 +200,20 @@ public abstract class Shape : MonoBehaviour
         float currentTime = Time.time - recordingStartTime;
         float frameInterval = 1f / animationFramerate;
 
-        // Check if it's time to record a new frame
         if (frameTimestamps.Count == 0 || currentTime >= frameTimestamps[frameTimestamps.Count - 1] + frameInterval)
         {
-            // Create a copy of the current mesh
             Mesh frameMesh = Object.Instantiate(mesh);
             frameMesh.name = $"{mesh.name}_frame_{animationFrames.Count}";
 
+            TransformData frameTransform = new TransformData
+            {
+                position = transform.position,
+                rotation = transform.eulerAngles,
+                scale = transform.localScale
+            };
+
             animationFrames.Add(frameMesh);
+            frameTransforms.Add(frameTransform);
             frameTimestamps.Add(currentTime);
 
             Debug.Log($"Shape '{name}': Recorded animation frame {animationFrames.Count} at time {currentTime:F3}s");
@@ -225,7 +221,7 @@ public abstract class Shape : MonoBehaviour
     }
 
     /// <summary>
-    /// Export the recorded animation frames to RAT and ACT files
+    /// Export the recorded animation frames to RAT and ACT files with transforms baked into vertices
     /// </summary>
     private void ExportRecordedAnimation()
     {
@@ -233,114 +229,51 @@ public abstract class Shape : MonoBehaviour
 
         UpdateBaseFilename();
 
+        // Convert recorded transforms to ActorTransformFloat format
+        var actorTransforms = frameTransforms.Select((t, index) => new Rat.ActorTransformFloat
+        {
+            position = t.position,
+            rotation = t.rotation,
+            scale = t.scale,
+            rat_file_index = 0,
+            rat_local_frame = (uint)index
+        }).ToList();
+
         try
         {
-            // Use the first frame as the reference for mesh structure
-            var referenceMesh = animationFrames[0];
-            var vertices = referenceMesh.vertices;
-            var triangles = referenceMesh.triangles;
-            var uvs = referenceMesh.uv.Length > 0 ? referenceMesh.uv : new Vector2[vertices.Length];
-            var colors = referenceMesh.colors.Length > 0 ? referenceMesh.colors : new Color[vertices.Length];
-
-            // Fill in defaults if needed
-            if (uvs.Length != vertices.Length)
-            {
-                uvs = new Vector2[vertices.Length];
-                for (int i = 0; i < vertices.Length; i++)
-                {
-                    uvs[i] = new Vector2(0.5f, 0.5f);
-                }
-            }
-
-            if (colors.Length != vertices.Length)
-            {
-                colors = new Color[vertices.Length];
-                for (int i = 0; i < vertices.Length; i++)
-                {
-                    colors[i] = color;
-                }
-            }
-
-            // Convert triangles to ushort indices
-            var indices = new ushort[triangles.Length];
-            for (int i = 0; i < triangles.Length; i++)
-            {
-                indices[i] = (ushort)triangles[i];
-            }
-
-            // Convert animation frames to vertex arrays
-            var frames = new List<Vector3[]>();
-            foreach (var frameMesh in animationFrames)
-            {
-                frames.Add(frameMesh.vertices);
-            }
-
-            // Generate texture filename
-            string textureFilename = $"assets/{baseFilename}.png";
-            string meshDataFilename = $"{baseFilename}.ratmesh";
-
-            // Compress animation data
-            var compressed = Rat.CommandLine.GLBToRAT.CompressFrames(
-                frames, indices, uvs, colors, textureFilename, meshDataFilename);
-
-            // Write RAT file with size splitting
-            var createdRatFiles = Rat.Tool.WriteRatFileWithSizeSplitting(baseFilename, compressed, 64);
-
-            // Create Actor animation data for the .act file
-            var actorData = new ActorAnimationData();
-            actorData.framerate = animationFramerate;
-            actorData.ratFilePaths.AddRange(createdRatFiles.ConvertAll(path => System.IO.Path.GetFileName(path)));
-
-            // Create transform keyframes for each animation frame
-            for (int i = 0; i < animationFrames.Count; i++)
-            {
-                var transformKeyframe = new ActorTransformFloat
-                {
-                    position = new Vector3(transform.position.x, transform.position.y, -transform.position.z),
-                    rotation = transform.eulerAngles,
-                    scale = transform.lossyScale,
-                    rat_file_index = 0,
-                    rat_local_frame = (uint)i
-                };
-                actorData.transforms.Add(transformKeyframe);
-            }
-
-            // Save .act file
-            string actFilePath = $"GeneratedData/{baseFilename}.act";
-            Actor.SaveActorData(actFilePath, actorData, embedMeshData: false);
-
-            Debug.Log($"Shape '{name}': Exported animation to .act file system:");
-            Debug.Log($"  - Frames: {animationFrames.Count}, Duration: {(animationFrames.Count / animationFramerate):F2}s");
-            Debug.Log($"  - RAT files: {string.Join(", ", createdRatFiles)}");
-            Debug.Log($"  - ACT file: {actFilePath}");
-
-            // Clean up recorded frames
-            foreach (var frameMesh in animationFrames)
-            {
-                Object.Destroy(frameMesh);
-            }
-            animationFrames.Clear();
-            frameTimestamps.Clear();
-
+            // Use unified export API with transforms to be baked into vertices
+            Rat.Tool.ExportAnimation(
+                baseFilename,
+                animationFrames.Select(m => m.vertices).ToList(),
+                animationFrames[0],
+                null,
+                null,
+                animationFramerate,
+                $"assets/{baseFilename}.png",
+                64, // maxFileSizeKB
+                Rat.ActorRenderingMode.TextureAndVertexColours,  // Changed from TextureWithDirectionalLight
+                actorTransforms  // Pass the recorded transforms
+            );
+            Debug.Log($"Shape: Animation exported with {actorTransforms.Count} transforms baked into vertices");
         }
         catch (System.Exception e)
         {
-            Debug.LogError($"Shape '{name}': Failed to export recorded animation: {e.Message}");
+            Debug.LogError($"Shape: Export failed - {e.Message}");
         }
+
+        foreach (var frameMesh in animationFrames)
+            Object.Destroy(frameMesh);
+        animationFrames.Clear();
+        frameTransforms.Clear();
     }
 
     /// <summary>
-    /// Export this shape as .rat and .act files for the C engine.
-    /// Creates a single-frame animation with the current mesh state.
+    /// Updates the base filename from transform name
     /// </summary>
-    public void ExportForCEngine()
+    private void UpdateBaseFilename()
     {
-        if (!generateRuntimeMesh || mesh == null) return;
-        
-        UpdateBaseFilename();
-        
-        // Use the Actor utility function to handle the export
-        Actor.ExportMeshToRatAct(baseFilename, mesh, transform, color);
+        string cleanName = System.Text.RegularExpressions.Regex.Replace(transform.name, @"[<>:""/\\|?*]", "_");
+        baseFilename = cleanName;
     }
 
     protected virtual void Reset()

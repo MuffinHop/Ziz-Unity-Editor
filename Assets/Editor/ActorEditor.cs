@@ -28,7 +28,7 @@ public class ActorEditor : Editor
                     actor.StopRecording();
                     Debug.Log($"Auto-saved recording for Actor '{actor.name}' when exiting Play Mode");
                 }
-                else if (actor.AnimationData != null && actor.AnimationData.transforms.Count > 0)
+                else if (actor.AnimationData != null && actor.AnimationData.ratFilePaths.Count > 0)
                 {
                     actor.SaveBothFiles();
                     Debug.Log($"Auto-saved animation data for Actor '{actor.name}' when exiting Play Mode");
@@ -36,6 +36,7 @@ public class ActorEditor : Editor
             }
         }
     }
+    
     public override void OnInspectorGUI()
     {
         Actor actor = (Actor)target;
@@ -130,7 +131,7 @@ public class ActorEditor : Editor
             if (actor.IsRecording)
             {
                 EditorGUILayout.HelpBox("🔴 Recording both RAT and Actor data automatically...\nFiles will be saved when exiting Play Mode", MessageType.Info);
-                EditorGUILayout.LabelField($"Saving to: GeneratedData/{actor.BaseFilename}.rat & GeneratedData/{actor.BaseFilename}.actor");
+                EditorGUILayout.LabelField($"Saving to: GeneratedData/{actor.BaseFilename}.rat & GeneratedData/{actor.BaseFilename}.act");
                 
                 if (GUILayout.Button("Stop Recording Now"))
                 {
@@ -140,7 +141,7 @@ public class ActorEditor : Editor
             else if (actor.Animator != null)
             {
                 EditorGUILayout.HelpBox("✅ Recording will start automatically when animation begins\nFiles will be saved when exiting Play Mode", MessageType.Info);
-                EditorGUILayout.LabelField($"Will save to: GeneratedData/{actor.BaseFilename}.rat & GeneratedData/{actor.BaseFilename}.actor");
+                EditorGUILayout.LabelField($"Will save to: GeneratedData/{actor.BaseFilename}.rat & GeneratedData/{actor.BaseFilename}.act");
             }
             else
             {
@@ -150,7 +151,7 @@ public class ActorEditor : Editor
         else
         {
             EditorGUILayout.HelpBox("Enter Play Mode to automatically start recording\nFiles will be saved automatically when exiting Play Mode", MessageType.Info);
-            EditorGUILayout.LabelField($"Will save to: GeneratedData/{actor.BaseFilename}.rat & GeneratedData/{actor.BaseFilename}.actor");
+            EditorGUILayout.LabelField($"Will save to: GeneratedData/{actor.BaseFilename}.rat & GeneratedData/{actor.BaseFilename}.act");
         }
         
         // File Management Section
@@ -161,9 +162,9 @@ public class ActorEditor : Editor
         {
             EditorGUILayout.HelpBox("✅ Files will be automatically saved when exiting Play Mode", MessageType.Info);
         }
-        else if (actor.AnimationData != null && actor.AnimationData.transforms.Count > 0)
+        else if (actor.AnimationData != null && actor.AnimationData.ratFilePaths.Count > 0)
         {
-            EditorGUILayout.HelpBox($"✅ Previous recording found with {actor.AnimationData.transforms.Count} keyframes\nReady for next Play Mode session", MessageType.Info);
+            EditorGUILayout.HelpBox($"✅ Previous recording found with {actor.AnimationData.ratFilePaths.Count} RAT file(s)\nReady for next Play Mode session", MessageType.Info);
         }
         else
         {
@@ -171,14 +172,14 @@ public class ActorEditor : Editor
         }
         
         // Animation data info
-        if (actor.AnimationData != null && actor.AnimationData.transforms.Count > 0)
+        if (actor.AnimationData != null && actor.AnimationData.ratFilePaths.Count > 0)
         {
             EditorGUILayout.Space();
             EditorGUILayout.LabelField("Recorded Animation Data", EditorStyles.boldLabel);
-            EditorGUILayout.LabelField($"Keyframes: {actor.AnimationData.transforms.Count}");
+            EditorGUILayout.LabelField($"RAT Files: {actor.AnimationData.ratFilePaths.Count}");
             EditorGUILayout.LabelField($"Framerate: {actor.AnimationData.framerate:F1} FPS");
-            EditorGUILayout.LabelField($"Duration: {(actor.AnimationData.transforms.Count / actor.AnimationData.framerate):F2} seconds");
-            EditorGUILayout.LabelField($"Model Center: ({actor.GetModelCenter().x:F3}, {actor.GetModelCenter().y:F3}, {actor.GetModelCenter().z:F3})");
+            EditorGUILayout.LabelField($"Mesh Vertices: {actor.AnimationData.meshUVs?.Length ?? 0}");
+            EditorGUILayout.LabelField($"Mesh Indices: {actor.AnimationData.meshIndices?.Length ?? 0}");
             
             // Validation section
             EditorGUILayout.Space();
@@ -201,9 +202,8 @@ public class ActorEditor : Editor
                     {
                         EditorUtility.DisplayDialog("Validation Success", 
                             "Actor and RAT files are synchronized!\n\n" +
-                            $"Frames: {actor.AnimationData.transforms.Count}\n" +
-                            $"Framerate: {actor.AnimationData.framerate:F1} FPS\n" +
-                            $"Model Center: {actor.GetModelCenter()}\n\n" +
+                            $"RAT Files: {actor.AnimationData.ratFilePaths.Count}\n" +
+                            $"Framerate: {actor.AnimationData.framerate:F1} FPS\n\n" +
                             "Your C engine can safely load both files.", "OK");
                     }
                     else
@@ -220,8 +220,8 @@ public class ActorEditor : Editor
                 EditorGUILayout.HelpBox(
                     "C Engine Integration Ready!\n" +
                     "• Load the .rat file for vertex animation data\n" +
-                    "• Load the .actor file for world transforms\n" +
-                    "• Apply: vertex_final = transform(rat_vertex + model_center)\n" +
+                    "• Load the .act file for mesh data and RAT file references\n" +
+                    "• All transforms are baked into RAT vertex data\n" +
                     "• See Assets/CEngine/actor_format.h for complete documentation", 
                     MessageType.Info);
             }
@@ -229,7 +229,7 @@ public class ActorEditor : Editor
             {
                 EditorGUILayout.HelpBox(
                     "Set a RAT file path to enable validation.\n" +
-                    "The RAT file contains vertex animation data that must be synchronized with Actor transforms.", 
+                    "The RAT file contains vertex animation data that must be synchronized with Actor mesh data.", 
                     MessageType.Warning);
             }
         }

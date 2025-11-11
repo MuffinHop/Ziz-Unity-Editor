@@ -8,8 +8,8 @@ using UnityEditor;
 #endif
 
 /// <summary>
-/// A MonoBehaviour to record vertex animation from a SkinnedMeshRenderer or MeshFilter
-/// in Play Mode and save it to a .rat file.
+/// DEPRECATED: Use AnimationRecorder instead.
+/// This component will be removed in a future version.
 /// </summary>
 public class RatRecorder : MonoBehaviour
 {
@@ -369,138 +369,64 @@ public class RatRecorder : MonoBehaviour
     }
 
     /// <summary>
-    /// Saves the recorded animation to .rat and .ratmesh files.
+    /// Saves the recorded animation to .rat and .act files with transforms baked into vertices.
     /// This is called when exiting play mode.
     /// </summary>
     private void SaveRecording()
     {
-        if (_recordedFrames.Count == 0)
-        {
-            Debug.LogWarning("No frames to save.");
-            return;
-        }
+        if (_recordedFrames.Count == 0) return;
 
-        Debug.Log($"Saving recording with {_recordedFrames.Count} frames. Compressing and splitting at {maxFileSizeKB}KB boundaries...");
-        Debug.Log($"Using delta-based compression from model center: {_modelCenter}");
+        Debug.Log($"RatRecorder: Saving {_recordedFrames.Count} frames with baked transforms...");
 
-        // Log what type of data was captured and compression settings
-        string captureType = "vertices only";
-        if (captureCurrentUVs && captureCurrentColors)
-            captureType = "vertices, static UVs, and static colors";
-        else if (captureCurrentUVs)
-            captureType = "vertices and static UVs";
-        else if (captureCurrentColors)
-            captureType = "vertices and static colors";
-        
-        string compressionMode = enableCompressionControl ? 
-            $"controlled compression (max bits: X={maxBitsX}, Y={maxBitsY}, Z={maxBitsZ})" : 
-            "automatic compression";
-        
-        Debug.Log($"Capture mode: {captureType}");
-        Debug.Log($"Compression mode: {compressionMode}");
-
-        // Debug: Log bounds information before compression
-        if (_recordedFrames.Count > 0)
-        {
-            var firstFrame = _recordedFrames[0];
-            var minBounds = firstFrame[0];
-            var maxBounds = firstFrame[0];
-            
-            foreach (var frame in _recordedFrames)
-            {
-                foreach (var vertex in frame)
-                {
-                    if (vertex.x < minBounds.x) minBounds.x = vertex.x;
-                    if (vertex.y < minBounds.y) minBounds.y = vertex.y;
-                    if (vertex.z < minBounds.z) minBounds.z = vertex.z;
-                    if (vertex.x > maxBounds.x) maxBounds.x = vertex.x;
-                    if (vertex.y > maxBounds.y) maxBounds.y = vertex.y;
-                    if (vertex.z > maxBounds.z) maxBounds.z = vertex.z;
-                }
-            }
-            
-            Debug.Log($"Animation bounds: Min({minBounds.x:F3}, {minBounds.y:F3}, {minBounds.z:F3}) Max({maxBounds.x:F3}, {maxBounds.y:F3}, {maxBounds.z:F3})");
-        }
-
-        // Compress all frames first, then use size-based splitting
-        Debug.Log($"Compressing {_recordedFrames.Count} frames with {compressionMode}...");
-        
-        Rat.CompressedAnimation compressedAnim;
-        if (enableCompressionControl)
-        {
-            compressedAnim = Rat.Tool.CompressFromFrames(_recordedFrames, _sourceMesh, _capturedUVs, _capturedColors, preserveFirstFrame, maxBitsX, maxBitsY, maxBitsZ);
-            Debug.Log($"Using compression control with max bits X={maxBitsX}, Y={maxBitsY}, Z={maxBitsZ}");
-        }
-        else
-        {
-            compressedAnim = Rat.Tool.CompressFromFrames(_recordedFrames, _sourceMesh, _capturedUVs, _capturedColors, preserveFirstFrame);
-            Debug.Log($"Using automatic bit width calculation");
-        }
-        
-        if (compressedAnim == null)
-        {
-            Debug.LogError("Compression failed. Cannot save animation.");
-            return;
-        }
-        
-        // Log compression info
-        if (compressedAnim.num_frames > 1)
-        {
-            long totalBits = 0;
-            for (int v = 0; v < compressedAnim.num_vertices; v++)
-            {
-                totalBits += compressedAnim.bit_widths_x[v] + compressedAnim.bit_widths_y[v] + compressedAnim.bit_widths_z[v];
-            }
-            float avgBitsPerVertex = (float)totalBits / compressedAnim.num_vertices;
-            float maxBitsPerVertex = 24.0f; // 8+8+8 bits
-            float compressionRatio = avgBitsPerVertex / maxBitsPerVertex;
-            float savings = (1.0f - compressionRatio) * 100.0f;
-            
-            Debug.Log($"Compression stats: {avgBitsPerVertex:F1} bits/vertex/frame (vs {maxBitsPerVertex} max), " +
-                     $"compression ratio: {compressionRatio:F2}, savings: {savings:F1}%");
-        }
-        
-        // Create GeneratedData directory if it doesn't exist
-        string generatedDataPath = Path.Combine(Application.dataPath.Replace("Assets", ""), "GeneratedData");
-        if (!Directory.Exists(generatedDataPath))
-        {
-            Directory.CreateDirectory(generatedDataPath);
-            Debug.Log($"Created GeneratedData directory at: {generatedDataPath}");
-        }
-        
-        // Use size-based splitting with configured KB limit
         try
         {
-            string baseFilePath = Path.Combine(generatedDataPath, baseFilename);
-            string meshDataFilename = $"{baseFilePath}.ratmesh";
-            compressedAnim.mesh_data_filename = meshDataFilename;
-            compressedAnim.texture_filename = textureFilename;
-
-            var createdFiles = Rat.Tool.WriteRatFileWithSizeSplitting(baseFilePath, compressedAnim, maxFileSizeKB);
+            // Store the model center as an offset that needs to be applied to each frame
+            List<UnityEngine.Vector3[]> framesToExport = new List<UnityEngine.Vector3[]>();
+            List<Rat.ActorTransformFloat> frameTransforms = new List<Rat.ActorTransformFloat>();
             
-            Debug.Log($"RAT file splitting complete! Created {createdFiles.Count} file(s):");
-            foreach (var file in createdFiles)
+            for (int i = 0; i < _recordedFrames.Count; i++)
             {
-                long fileSize = new FileInfo(file).Length;
-                Debug.Log($"  - {Path.GetFileName(file)} ({fileSize} bytes)");
+                // Each frame already has vertices relative to model center (delta vertices)
+                // We need to convert them back to world space by adding the model center
+                Vector3[] worldSpaceVertices = new Vector3[_recordedFrames[i].Length];
+                for (int v = 0; v < _recordedFrames[i].Length; v++)
+                {
+                    worldSpaceVertices[v] = _recordedFrames[i][v] + _modelCenter;
+                }
+                framesToExport.Add(worldSpaceVertices);
+                
+                // Store identity transform (animation is in vertices now)
+                frameTransforms.Add(new Rat.ActorTransformFloat
+                {
+                    position = Vector3.zero,
+                    rotation = Vector3.zero,
+                    scale = Vector3.one,
+                    rat_file_index = 0,
+                    rat_local_frame = (uint)i
+                });
             }
-            long meshFileSize = new FileInfo(meshDataFilename).Length;
-            Debug.Log($"  - {Path.GetFileName(meshDataFilename)} ({meshFileSize} bytes)");
+            
+            Rat.Tool.ExportAnimation(
+                baseFilename,
+                framesToExport,
+                _sourceMesh,
+                _capturedUVs,
+                _capturedColors,
+                captureFramerate,
+                textureFilename,
+                maxFileSizeKB,
+                Rat.ActorRenderingMode.TextureWithDirectionalLight,
+                frameTransforms  // Pass transforms
+            );
+            
+            Debug.Log($"RatRecorder: Export complete - all transforms baked into vertices");
         }
-        catch (System.InvalidOperationException ex)
+        catch (System.Exception e)
         {
-            Debug.LogError($"RAT file creation failed: {ex.Message}");
-            Debug.LogError("Try reducing mesh complexity, using compression control with lower bit limits, or increasing the file size limit.");
-            return;
+            Debug.LogError($"RatRecorder: Export failed - {e.Message}");
         }
-        catch (System.Exception ex)
-        {
-            Debug.LogError($"Unexpected error during RAT file creation: {ex.Message}");
-            return;
-        }
-        
-        _recordedFrames.Clear(); // Clear frames after saving
-        _recordingComplete = false; // Reset flag
+
+        _recordedFrames.Clear();
     }
 
     /// <summary>

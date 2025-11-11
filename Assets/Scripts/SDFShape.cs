@@ -303,7 +303,6 @@ public class SDFShape : MonoBehaviour
     }
 
     private void RenderToPNG() {
-        // Simplified, robust exporter supporting multiple sizes.
         switch (emulatedResolution)
         {
             case SDFEmulatedResolution.Tex512x512:
@@ -317,7 +316,6 @@ public class SDFShape : MonoBehaviour
                 break;
             case SDFEmulatedResolution.None:
             default:
-                // nothing to export
                 break;
         }
     }
@@ -646,8 +644,8 @@ public class SDFShape : MonoBehaviour
                 // Auto-export all shapes to RATs when exiting play mode
                 if (frameTransforms.Count > 0)
                 {
-                    Debug.Log("Exiting play mode - auto-exporting SDF shapes to RAT files...");
-                    ExportAllShapesToRATs(autoExport: true);
+                    Debug.Log("[Auto-Export] Exporting SDF shapes to RAT/ACT files...");
+                    ExportAllShapesToRATs();
                 }
                 frameTransforms.Clear();
             }
@@ -672,21 +670,15 @@ public class SDFShape : MonoBehaviour
     {
         try
         {
-            // Count total vertices from all SDF shapes and RAT files
             uint totalSdfVertices = 0;
             var sdfShapes = FindObjectsOfType<SDFShape>();
             foreach (var shape in sdfShapes)
             {
-                // Each SDF shape uses a quad (4 vertices)
                 totalSdfVertices += 4;
             }
 
-            // Calculate hypothetical framerates
             float sdfFrameRate = CalculateHypotheticalFrameRate(totalSdfVertices);
-            string titleInfo = $"SDF FPS: {sdfFrameRate:F1} | Vertices: {totalSdfVertices}";
-
-            // Update window title (Unity doesn't directly expose title bar, but we can log it)
-            Debug.Log($"[Performance] {titleInfo}");
+            Debug.Log($"[Performance] SDF FPS: {sdfFrameRate:F1} | Vertices: {totalSdfVertices}");
         }
         catch
         {
@@ -702,15 +694,9 @@ public class SDFShape : MonoBehaviour
         return generatedDataPath;
     }
 
-    [MenuItem("Ziz/Export All Shapes to RATs")]
-    public static void ExportAllShapesToRATs()
+    private static void ExportAllShapesToRATs()
     {
-        ExportAllShapesToRATs(autoExport: false);
-    }
-
-    private static void ExportAllShapesToRATs(bool autoExport = false)
-    {
-        if (!autoExport && !EditorApplication.isPlaying)
+        if (!EditorApplication.isPlaying)
         {
             EditorUtility.DisplayDialog("Error", "This function must be run in play mode.", "OK");
             return;
@@ -719,10 +705,7 @@ public class SDFShape : MonoBehaviour
         var allShapes = FindObjectsOfType<SDFShape>();
         if (allShapes.Length == 0)
         {
-            if (!autoExport)
-            {
-                EditorUtility.DisplayDialog("Info", "No SDFShape objects found in the scene.", "OK");
-            }
+            EditorUtility.DisplayDialog("Info", "No SDFShape objects found in the scene.", "OK");
             return;
         }
 
@@ -766,8 +749,8 @@ public class SDFShape : MonoBehaviour
 
             Debug.Log($"Processing shape '{gameObjectName}' using detailed texture: {detailedTextureFilename} ({group.Count()} instance(s))");
 
+            List<Rat.ActorTransformFloat> allFramesTransforms = new List<Rat.ActorTransformFloat>();
             List<Vector3[]> allFramesVertices = new List<Vector3[]>();
-            List<TransformData> allFramesTransforms = new List<TransformData>();
             int vertexCount = quadMesh.vertexCount;
 
             // Sort frames by frame number
@@ -797,82 +780,61 @@ public class SDFShape : MonoBehaviour
                     {
                         vertices[i] = matrix.MultiplyPoint3x4(quadMesh.vertices[i]);
                     }
-                    allFramesTransforms.Add(shapeTransform.Value);
+                    
+                    // Store transform for baking
+                    allFramesTransforms.Add(new Rat.ActorTransformFloat
+                    {
+                        position = shapeTransform.Value.position,
+                        rotation = shapeTransform.Value.rotation.eulerAngles,
+                        scale = shapeTransform.Value.scale,
+                        rat_file_index = 0,
+                        rat_local_frame = (uint)allFramesTransforms.Count
+                    });
                 }
                 else
                 {
-                    // If no shape from this group was active, use an empty frame
+                    // Empty frame with identity transform
                     for (int i = 0; i < vertexCount; i++)
                     {
                         vertices[i] = Vector3.zero;
                     }
-                    // Add identity transform for missing frames
-                    allFramesTransforms.Add(new TransformData { position = Vector3.zero, rotation = Quaternion.identity, scale = Vector3.one, time = 0 });
+                    allFramesTransforms.Add(new Rat.ActorTransformFloat
+                    {
+                        position = Vector3.zero,
+                        rotation = Vector3.zero,
+                        scale = Vector3.one,
+                        rat_file_index = 0,
+                        rat_local_frame = (uint)allFramesTransforms.Count
+                    });
                 }
                 allFramesVertices.Add(vertices);
             }
 
             if (allFramesVertices.Count > 0)
             {
-                // Use GameObject name as the base for RAT files (in ShapeAnims subdirectory)
                 string baseRatFilename = gameObjectName;
-                string ratOutputPath = System.IO.Path.Combine(outputDir, baseRatFilename);
-
-                // Compress and create RAT files
-                Rat.CompressedAnimation anim = Rat.Tool.CompressFromFrames(allFramesVertices, quadMesh, null, null);
                 
-                if (anim != null)
+                try
                 {
-                    // Assign mesh and texture filenames
-                    // Note: mesh_data_filename is referenced by RAT but actual mesh data is embedded in .act file
-                    anim.mesh_data_filename = $"{baseRatFilename}.ratmesh";
-                    anim.texture_filename = detailedTextureFilename; // Use detailed texture name
-
-                    // Use the size-splitting writer
-                    List<string> createdFiles = Rat.Tool.WriteRatFileWithSizeSplitting(ratOutputPath, anim);
+                    // Use unified export API with transforms to be baked
+                    Rat.Tool.ExportAnimation(
+                        baseRatFilename,
+                        allFramesVertices,
+                        quadMesh,
+                        null,
+                        null,
+                        exportFrameRate,
+                        detailedTextureFilename,
+                        64, // maxFileSizeKB
+                        Rat.ActorRenderingMode.TextureWithDirectionalLight,
+                        allFramesTransforms  // Pass transforms
+                    );
                     
-                    Debug.Log($"Successfully exported {createdFiles.Count} RAT file(s) for shape '{gameObjectName}'.");
-                    
-                    // Create .act file for this shape using GameObject name
-                    ActorAnimationData actorData = new ActorAnimationData();
-                    actorData.framerate = exportFrameRate; // Use the configured export framerate
-                    
-                    // Add all RAT files to the actor data
-                    foreach (string ratFile in createdFiles.Where(f => f.EndsWith(".rat")))
-                    {
-                        actorData.ratFilePaths.Add(System.IO.Path.GetFileName(ratFile));
-                    }
-                    
-                    // Create transform keyframes for each frame
-                    for (int i = 0; i < allFramesVertices.Count; i++)
-                    {
-                        // For SDF shapes, we use identity transforms since the vertex animation
-                        // already contains the transformed positions
-                        ActorTransformFloat transform = new ActorTransformFloat
-                        {
-                            position = Vector3.zero,
-                            rotation = Vector3.zero,
-                            scale = Vector3.one,
-                            rat_file_index = 0,
-                            rat_local_frame = (uint)i
-                        };
-                        actorData.transforms.Add(transform);
-                        
-                        // Debug: show what the recorded transform was for this frame
-                        if (i < allFramesTransforms.Count)
-                        {
-                            var recordedTransform = allFramesTransforms[i];
-                            Debug.Log($"SDFShape '{gameObjectName}' frame {i}: Recorded transform - pos {recordedTransform.position:F2}, rot {recordedTransform.rotation.eulerAngles:F2}, scale {recordedTransform.scale:F2}");
-                        }
-                    }
-                    
-                    // Save .act file to ROOT GeneratedData directory using GameObject name
-                    string actFilePath = System.IO.Path.Combine(GetGeneratedDataPath(), $"{gameObjectName}.act");
-                    Actor.SaveActorData(actFilePath, actorData, ActorRenderingMode.TextureOnly, embedMeshData: false);
-                    
-                    Debug.Log($"Created .act file for shape '{gameObjectName}': {actFilePath}");
-                    Debug.Log($"  - RAT files: {string.Join(", ", createdFiles.Select(f => System.IO.Path.GetFileName(f)))}");
-                    Debug.Log($"  - Texture: {detailedTextureFilename}");
+                    Debug.Log($"Successfully exported RAT/ACT for shape '{gameObjectName}' with transforms baked.");
+                }
+                catch (System.Exception e)
+                {
+                    Debug.LogError($"Failed to export shape '{gameObjectName}': {e.Message}");
                 }
             }
         }
