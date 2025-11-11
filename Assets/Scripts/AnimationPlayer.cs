@@ -386,6 +386,7 @@ public class AnimationPlayer : MonoBehaviour
     
     /// <summary>
     /// Load ACT file data with proper parsing of version 6 format
+    /// Version 6 stores all transforms baked into RAT vertex data (no separate transform keyframes)
     /// </summary>
     private ActorAnimationData LoadActorData(string path)
     {
@@ -427,6 +428,10 @@ public class AnimationPlayer : MonoBehaviour
                 }
             }
             data.ratFilePaths.AddRange(ratPaths);
+            
+            // Note: Version 6 ACT files have all transforms baked into RAT vertex data
+            // There are no separate transform keyframes stored in the ACT file
+            // Animation playback uses only vertex animation from RAT files
             
             return data;
         }

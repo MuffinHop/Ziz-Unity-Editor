@@ -824,7 +824,7 @@ public class SDFShape : MonoBehaviour
                         null,
                         null,
                         exportFrameRate,
-                        detailedTextureFilename,
+                        detailedTextureFilename,  // Just the filename, no "assets/" prefix
                         64, // maxFileSizeKB
                         Rat.ActorRenderingMode.TextureWithDirectionalLight,
                         allFramesTransforms  // Pass transforms

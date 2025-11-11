@@ -1053,7 +1053,14 @@ namespace Rat
                 return;
             }
 
-            compressed.texture_filename = textureFilename;
+            // Clean up texture filename - remove "assets/" prefix if present
+            string cleanTextureFilename = textureFilename;
+            if (!string.IsNullOrEmpty(cleanTextureFilename) && cleanTextureFilename.StartsWith("assets/"))
+            {
+                cleanTextureFilename = cleanTextureFilename.Substring("assets/".Length);
+            }
+
+            compressed.texture_filename = cleanTextureFilename;
             compressed.mesh_data_filename = $"{baseFilename}.ratmesh";
 
             // Create GeneratedData directory
@@ -1080,7 +1087,7 @@ namespace Rat
             actorData.meshUVs = capturedUVs ?? sourceMesh.uv;
             actorData.meshColors = capturedColors ?? sourceMesh.colors;
             actorData.meshIndices = sourceMesh.triangles;
-            actorData.textureFilename = textureFilename;
+            actorData.textureFilename = cleanTextureFilename;
 
             string actFilePath = System.IO.Path.Combine(generatedDataPath, $"{baseFilename}.act");
             Actor.SaveActorData(actFilePath, actorData, renderingMode, embedMeshData: true);
@@ -1088,6 +1095,7 @@ namespace Rat
             UnityEngine.Debug.Log($"ExportAnimation: Complete");
             UnityEngine.Debug.Log($"  RAT files ({ratFiles.Count}): Bounds={compressed.min_x:F2}-{compressed.max_x:F2}, {compressed.min_y:F2}-{compressed.max_y:F2}, {compressed.min_z:F2}-{compressed.max_z:F2}");
             UnityEngine.Debug.Log($"  Vertices: {compressed.num_vertices}, Frames: {compressed.num_frames}");
+            UnityEngine.Debug.Log($"  Texture: {cleanTextureFilename}");
             UnityEngine.Debug.Log($"  ACT file: Mesh data + RAT references (all transforms baked into RAT vertex data)");
         }
     }

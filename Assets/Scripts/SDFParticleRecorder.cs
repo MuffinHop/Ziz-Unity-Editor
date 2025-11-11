@@ -656,7 +656,7 @@ public class SDFParticleRecorder : MonoBehaviour
                 uvs,
                 colors,
                 captureFramerate,
-                $"assets/{textureFilename}",
+                textureFilename,  // Just the filename, no "assets/" prefix
                 maxFileSizeKB,
                 Rat.ActorRenderingMode.TextureWithDirectionalLight,
                 frameTransforms  // Pass transforms

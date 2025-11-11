@@ -28,6 +28,13 @@ public class RecordCamera : MonoBehaviour
     public string fileName = "camera_track";
     public float recordingFPS = 30f; // Target recording frame rate
 
+    // New: export options for coordinate conventions
+    [Tooltip("If true, flip the Z axis when exporting (Unity → right-handed).")]
+    public bool flipZ = true;
+
+    [Tooltip("If true, when flipping Z also invert Y/Z Euler angles to match reflected coordinate system.")]
+    public bool flipRotationWithZ = true;
+
     [Header("Debug Info")]
     private int keyframeCount = 0; // Read-only field (not shown in Inspector)
     public bool showDebugInfo = true;
@@ -147,19 +154,33 @@ public class RecordCamera : MonoBehaviour
         // Get field of view
         float fov = targetCamera.fieldOfView;
         
-        // Create float keyframe
+        // Apply optional coordinate conversion for export
+        Vector3 exportPos = position;
+        Vector3 exportRot = eulerAngles;
+        if (flipZ)
+        {
+            exportPos.z = -exportPos.z;
+            if (flipRotationWithZ)
+            {
+                // Reflect rotation to match the Z-flip: invert yaw and roll (Y and Z Euler)
+                exportRot.y = -exportRot.y;
+                exportRot.z = -exportRot.z;
+            }
+        }
+        
+        // Create float keyframe (export-space)
         CameraKeyframeFloat floatKeyframe = new CameraKeyframeFloat
         {
-            position = new Vector3(position.x, position.y, -position.z), // Convert to right-handed coordinates
-            rotation = eulerAngles,
+            position = exportPos,
+            rotation = exportRot,
             fov = fov
         };
         
         floatKeyframes.Add(floatKeyframe);
         
-        // Update position bounds for dynamic scaling
-        positionMin = Vector3.Min(positionMin, position);
-        positionMax = Vector3.Max(positionMax, position);
+        // Update position bounds for dynamic scaling (use export position for consistency)
+        positionMin = Vector3.Min(positionMin, exportPos);
+        positionMax = Vector3.Max(positionMax, exportPos);
         
         // Debug output every 60 frames
         if (showDebugInfo && floatKeyframes.Count % 60 == 0)
