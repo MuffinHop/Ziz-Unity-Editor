@@ -180,42 +180,128 @@ public class AnimationPlayer : MonoBehaviour
     }
     
     /// <summary>
-    /// Create mesh from embedded ACT data (version 5)
+    /// Create mesh from embedded ACT data (version 6)
     /// </summary>
     private void CreateMeshFromActData()
     {
+        if (_meshFilter == null)
+        {
+            Debug.LogError("AnimationPlayer: MeshFilter not found!");
+            return;
+        }
+        
         if (_mesh == null)
         {
             _mesh = new Mesh();
             _mesh.name = "AnimationMesh";
         }
         
-        // For now, create a simple quad mesh as placeholder
-        // In a full implementation, you'd extract UVs, colors, indices from ACT file
-        _mesh.vertices = new Vector3[]
+        try
         {
-            new Vector3(-0.5f, -0.5f, 0),
-            new Vector3(0.5f, -0.5f, 0),
-            new Vector3(-0.5f, 0.5f, 0),
-            new Vector3(0.5f, 0.5f, 0)
-        };
-        _mesh.uv = new Vector2[]
+            // If we have RAT animations, create a mesh with the right vertex count
+            if (_ratAnimations.Count > 0)
+            {
+                var ratAnim = _ratAnimations[0];
+                var vertices = new Vector3[ratAnim.num_vertices];
+                
+                // Initialize with first frame data
+                Core.DecompressToFrame(_decompContexts[0], ratAnim, 0);
+                for (int i = 0; i < ratAnim.num_vertices; i++)
+                {
+                    float x = ratAnim.min_x + (_decompContexts[0].current_positions[i].x / 255f) * (ratAnim.max_x - ratAnim.min_x);
+                    float y = ratAnim.min_y + (_decompContexts[0].current_positions[i].y / 255f) * (ratAnim.max_y - ratAnim.min_y);
+                    float z = ratAnim.min_z + (_decompContexts[0].current_positions[i].z / 255f) * (ratAnim.max_z - ratAnim.min_z);
+                    vertices[i] = new Vector3(x, y, -z);
+                }
+                
+                _mesh.vertices = vertices;
+                
+                // Create proper triangle indices (quads: each 4 vertices = 2 triangles = 6 indices)
+                if (ratAnim.num_vertices >= 4)
+                {
+                    int numQuads = (int)ratAnim.num_vertices / 4;
+                    var triangles = new int[numQuads * 6];
+                    
+                    for (int i = 0; i < numQuads; i++)
+                    {
+                        int vertexOffset = i * 4;
+                        int indexOffset = i * 6;
+                        
+                        // Quad: two triangles
+                        triangles[indexOffset + 0] = vertexOffset + 0;
+                        triangles[indexOffset + 1] = vertexOffset + 1;
+                        triangles[indexOffset + 2] = vertexOffset + 2;
+                        
+                        triangles[indexOffset + 3] = vertexOffset + 2;
+                        triangles[indexOffset + 4] = vertexOffset + 1;
+                        triangles[indexOffset + 5] = vertexOffset + 3;
+                    }
+                    _mesh.triangles = triangles;
+                }
+                
+                // Create default UVs
+                var uvs = new Vector2[ratAnim.num_vertices];
+                for (int i = 0; i < ratAnim.num_vertices; i++)
+                {
+                    uvs[i] = new Vector2(0, 0);
+                }
+                _mesh.uv = uvs;
+                
+                // Create default colors
+                var colors = new Color[ratAnim.num_vertices];
+                for (int i = 0; i < ratAnim.num_vertices; i++)
+                {
+                    colors[i] = Color.white;
+                }
+                _mesh.colors = colors;
+                
+                _mesh.RecalculateBounds();
+            }
+            else
+            {
+                // Fallback: create a simple quad mesh as placeholder
+                _mesh.vertices = new Vector3[]
+                {
+                    new Vector3(-0.5f, -0.5f, 0),
+                    new Vector3(0.5f, -0.5f, 0),
+                    new Vector3(-0.5f, 0.5f, 0),
+                    new Vector3(0.5f, 0.5f, 0)
+                };
+                _mesh.uv = new Vector2[]
+                {
+                    new Vector2(0, 0),
+                    new Vector2(1, 0),
+                    new Vector2(0, 1),
+                    new Vector2(1, 1)
+                };
+                _mesh.triangles = new int[] { 0, 1, 2, 2, 1, 3 };
+                _mesh.colors = new Color[]
+                {
+                    Color.white,
+                    Color.white,
+                    Color.white,
+                    Color.white
+                };
+            }
+        }
+        catch (System.Exception e)
         {
-            new Vector2(0, 0),
-            new Vector2(1, 0),
-            new Vector2(0, 1),
-            new Vector2(1, 1)
-        };
-        _mesh.triangles = new int[] { 0, 1, 2, 2, 1, 3 };
-        _mesh.colors = new Color[]
-        {
-            Color.white,
-            Color.white,
-            Color.white,
-            Color.white
-        };
+            Debug.LogError($"AnimationPlayer: Error creating mesh: {e.Message}");
+            // Create minimal fallback mesh so something still renders
+            _mesh.vertices = new Vector3[]
+            {
+                Vector3.zero,
+                Vector3.one,
+                Vector3.one * 2f
+            };
+            _mesh.triangles = new int[] { 0, 1, 2 };
+        }
         
-        _meshFilter.mesh = _mesh;
+        // Always assign the mesh to the filter, even if it's minimal
+        if (_meshFilter != null)
+        {
+            _meshFilter.mesh = _mesh;
+        }
     }
     
     /// <summary>

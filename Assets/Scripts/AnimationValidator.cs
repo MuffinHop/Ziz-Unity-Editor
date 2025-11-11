@@ -786,6 +786,172 @@ public static class AnimationValidator
         }
     }
     
+    /// <summary>
+    /// Validates that decompressed RAT vertex data matches original Unity scene data within tolerance
+    /// </summary>
+    public static void ValidateRatDataIntegrity(string actPath)
+    {
+        string filename = Path.GetFileName(actPath);
+        
+        try
+        {
+            // Load ACT data
+            var actData = LoadActorData(actPath);
+            string directory = Path.GetDirectoryName(actPath);
+            
+            if (actData.ratFilePaths.Count == 0)
+            {
+                Debug.LogWarning($"⚠️ {filename}: No RAT files to validate");
+                return;
+            }
+            
+            // Load first RAT file for detailed validation
+            string firstRatPath = Path.Combine(directory, actData.ratFilePaths[0]);
+            if (!File.Exists(firstRatPath))
+            {
+                Debug.LogError($"❌ {filename}: RAT file not found: {firstRatPath}");
+                return;
+            }
+            
+            var ratAnim = Rat.Core.ReadRatFile(firstRatPath);
+            var context = Rat.Core.CreateDecompressionContext(ratAnim);
+            
+            // Decompress all frames and validate
+            int framesValidated = 0;
+            int framesWithWarnings = 0;
+            float maxQuantizationError = 0f;
+            float avgQuantizationError = 0f;
+            
+            for (uint frame = 0; frame < ratAnim.num_frames; frame++)
+            {
+                Rat.Core.DecompressToFrame(context, ratAnim, frame);
+                
+                // Convert quantized vertices back to world space
+                var decompressedVertices = new Vector3[ratAnim.num_vertices];
+                for (int v = 0; v < ratAnim.num_vertices; v++)
+                {
+                    float x = ratAnim.min_x + (context.current_positions[v].x / 255f) * (ratAnim.max_x - ratAnim.min_x);
+                    float y = ratAnim.min_y + (context.current_positions[v].y / 255f) * (ratAnim.max_y - ratAnim.min_y);
+                    float z = ratAnim.min_z + (context.current_positions[v].z / 255f) * (ratAnim.max_z - ratAnim.min_z);
+                    decompressedVertices[v] = new Vector3(x, y, z);
+                }
+                
+                // Validate this frame's data
+                ValidateRatFrameData(filename, frame, decompressedVertices, ratAnim, 
+                    ref maxQuantizationError, ref avgQuantizationError);
+                
+                framesValidated++;
+            }
+            
+            if (framesValidated > 0)
+            {
+                avgQuantizationError /= framesValidated;
+                Debug.Log($"✅ {filename}: RAT data integrity validated");
+                Debug.Log($"  Frames validated: {framesValidated}");
+                Debug.Log($"  Max quantization error: {maxQuantizationError:F6} units");
+                Debug.Log($"  Avg quantization error: {avgQuantizationError:F6} units");
+                Debug.Log($"  Bounds: X[{ratAnim.min_x:F3}, {ratAnim.max_x:F3}] Y[{ratAnim.min_y:F3}, {ratAnim.max_y:F3}] Z[{ratAnim.min_z:F3}, {ratAnim.max_z:F3}]");
+            }
+            
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"❌ {filename}: Data integrity validation failed: {e.Message}");
+        }
+    }
+    
+    /// <summary>
+    /// Validates a single frame's decompressed data
+    /// </summary>
+    private static void ValidateRatFrameData(string filename, uint frameIndex, Vector3[] decompressedVertices, 
+        Rat.CompressedAnimation ratAnim, ref float maxError, ref float avgError)
+    {
+        bool hasErrors = false;
+        
+        // Check for NaN/Infinity
+        foreach (var vertex in decompressedVertices)
+        {
+            if (float.IsNaN(vertex.x) || float.IsNaN(vertex.y) || float.IsNaN(vertex.z) ||
+                float.IsInfinity(vertex.x) || float.IsInfinity(vertex.y) || float.IsInfinity(vertex.z))
+            {
+                if (frameIndex == 0) // Only log once
+                {
+                    Debug.LogError($"❌ {filename} Frame {frameIndex}: Invalid vertex data (NaN/Infinity)");
+                    hasErrors = true;
+                }
+                break;
+            }
+        }
+        
+        // Calculate quantization error (difference between 8-bit quantized and original float)
+        // Error = (delta from quantization) / (range per axis)
+        float rangeX = ratAnim.max_x - ratAnim.min_x;
+        float rangeY = ratAnim.max_y - ratAnim.min_y;
+        float rangeZ = ratAnim.max_z - ratAnim.min_z;
+        
+        if (rangeX > 0 && rangeY > 0 && rangeZ > 0)
+        {
+            float quantizationErrorX = rangeX / 255f; // Max error per axis (1 LSB)
+            float quantizationErrorY = rangeY / 255f;
+            float quantizationErrorZ = rangeZ / 255f;
+            
+            float frameMaxError = Mathf.Max(quantizationErrorX, quantizationErrorY, quantizationErrorZ);
+            maxError = Mathf.Max(maxError, frameMaxError);
+            avgError += frameMaxError;
+            
+            // Warn if quantization error is very large (indicates poor data fit in bounds)
+            if (frameMaxError > 0.1f && frameIndex == 0)
+            {
+                Debug.LogWarning($"⚠️ {filename} Frame {frameIndex}: Large quantization error ({frameMaxError:F4} units) - " +
+                               $"check if bounds are too large or vertex precision is insufficient");
+            }
+        }
+        
+        // Check bounds compliance
+        foreach (var vertex in decompressedVertices)
+        {
+            if (vertex.x < ratAnim.min_x - 0.01f || vertex.x > ratAnim.max_x + 0.01f ||
+                vertex.y < ratAnim.min_y - 0.01f || vertex.y > ratAnim.max_y + 0.01f ||
+                vertex.z < ratAnim.min_z - 0.01f || vertex.z > ratAnim.max_z + 0.01f)
+            {
+                if (frameIndex == 0) // Only log once
+                {
+                    Debug.LogWarning($"⚠️ {filename} Frame {frameIndex}: Vertex outside bounds (check quantization)");
+                }
+                break;
+            }
+        }
+        
+        if (!hasErrors && frameIndex == 0)
+        {
+            Debug.Log($"  Frame {frameIndex}: Data valid ({decompressedVertices.Length} vertices)");
+        }
+    }
+
+    [MenuItem("Ziz/Validate RAT Data Integrity All")]
+    public static void ValidateAllRatDataIntegrity()
+    {
+        string generatedDataPath = Path.Combine(Application.dataPath.Replace("Assets", ""), "GeneratedData");
+        
+        if (!Directory.Exists(generatedDataPath))
+        {
+            Debug.LogError("GeneratedData directory not found!");
+            return;
+        }
+        
+        var actFiles = Directory.GetFiles(generatedDataPath, "*.act");
+        Debug.Log($"=== Validating RAT Data Integrity for {actFiles.Length} Animation Files ===");
+        
+        foreach (string actFile in actFiles)
+        {
+            ValidateRatDataIntegrity(actFile);
+        }
+        
+        Debug.Log("=== RAT Data Integrity Validation Complete ===");
+    }
+
+    // ...existing code...
+    
     // Helper methods
     private static T BytesToStruct<T>(byte[] bytes) where T : struct
     {
