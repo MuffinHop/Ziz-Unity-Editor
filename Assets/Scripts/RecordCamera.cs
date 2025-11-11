@@ -150,7 +150,7 @@ public class RecordCamera : MonoBehaviour
         // Create float keyframe
         CameraKeyframeFloat floatKeyframe = new CameraKeyframeFloat
         {
-            position = position,
+            position = new Vector3(position.x, position.y, -position.z), // Convert to right-handed coordinates
             rotation = eulerAngles,
             fov = fov
         };

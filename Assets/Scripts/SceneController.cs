@@ -4,6 +4,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System;
 using System.Linq;
+using ZizSceneEditor.Assets.Scripts.Shapes;
 #if UNITY_EDITOR
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -366,6 +367,19 @@ public class SceneController : MonoBehaviour
             Debug.Log($"Shape '{representative.gameObject.name}': Scene file will reference '{actPath}'");
             
             trackedComponents.Add(new TrackedComponent(representative, representative.gameObject.name, actPath, ComponentType.Shape, currentId++));
+        }
+
+        // Find all SkyBox components
+        SkyBox[] skyBoxes = FindObjectsOfType<SkyBox>();
+        foreach (var skyBox in skyBoxes)
+        {
+            // SkyBox references .act files in the root GeneratedData directory
+            // The .act file is created by the SkyBox.ExportToRAT function
+            string actPath = $"{skyBox.gameObject.name}.act";
+            
+            Debug.Log($"SkyBox '{skyBox.gameObject.name}': Scene file will reference '{actPath}'");
+            
+            trackedComponents.Add(new TrackedComponent(skyBox, skyBox.gameObject.name, actPath, ComponentType.Shape, currentId++));
         }
 
         // Find all SDFParticleRecorder components

@@ -159,6 +159,11 @@ namespace Rat.CommandLine
             return anim;
         }
 
+        /// <summary>
+        /// DEPRECATED: This command-line utility function creates separate .ratmesh files.
+        /// Use Rat.Tool.WriteRatFileWithSizeSplitting() instead, which embeds mesh data in .act files.
+        /// </summary>
+        [Obsolete("Use Rat.Tool.WriteRatFileWithSizeSplitting() instead. Mesh data is now embedded in .act files.")]
         public static void WriteRatFile(string filename, CompressedAnimation anim)
         {
             string meshDataFilename = null;
@@ -168,7 +173,9 @@ namespace Rat.CommandLine
                 string meshPath = Path.Combine(Path.GetDirectoryName(filename), meshDataFilename);
                 using (var meshStream = File.Open(meshPath, FileMode.Create))
                 {
+                    #pragma warning disable CS0618 // Type or member is obsolete
                     Rat.Tool.WriteRatMeshFile(meshStream, anim);
+                    #pragma warning restore CS0618 // Type or member is obsolete
                 }
             }
 
@@ -342,7 +349,9 @@ namespace Rat.CommandLine
             compressed.texture_filename = "test_texture.png";
 
             Console.WriteLine($"3. Writing to '{testFile}' and '{testMeshFile}'...");
+            #pragma warning disable CS0618 // Type or member is obsolete
             WriteRatFile(testFile, compressed);
+            #pragma warning restore CS0618 // Type or member is obsolete
 
             Console.WriteLine($"4. Reading from '{testFile}'...");
             var reRead = ReadRatFile(testFile);
@@ -390,7 +399,7 @@ Description:
 
 Key Features:
 - Lossy vertex animation compression for 3D models.
-- V3 format separates static mesh data (.ratmesh) from animation data (.rat).
+- Static mesh data is embedded in .act files; animation data is stored in .rat files.
 - Subsequent frames use delta compression with variable bit-width encoding.
 - Constant-time frame access with minimal runtime decompression overhead.
 

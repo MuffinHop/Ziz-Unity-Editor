@@ -929,7 +929,7 @@ public class Level : MonoBehaviour
     }
     
     /// <summary>
-    /// Write data to EMU format file (version 4 with texture filename support)
+    /// Write data to EMU format file (version 4)
     /// Format matches emudraw.c load_emu() expectations exactly
     /// </summary>
     private void WriteEMUFile()
@@ -961,7 +961,6 @@ public class Level : MonoBehaviour
             writer.Write((uint)faces.Count);          // fcount (face count) 
             writer.Write((uint)leafNodes.Count);      // lcount (leaf count)
             
-            // NEW: Texture filename support (version 4 feature)
             // Write texture filename with length prefix (uint32 length + string data)
             string textureFilename = textureFileName;
             
@@ -1201,7 +1200,7 @@ public class Level : MonoBehaviour
                 uint endian = reader.ReadUInt32();
                 
                 Debug.Log($"EMU Validation - Magic: 0x{magic:X8} (expected: 0x454D5520)");
-                Debug.Log($"EMU Validation - Version: {version} (expected: 4 for texture filename support)");
+                Debug.Log($"EMU Validation - Version: {version} (expected: 4)");
                 Debug.Log($"EMU Validation - Endian: 0x{endian:X8} (expected: 0x01020304)");
                 
                 bool headerValid = (magic == 0x454D5520 && version == 4 && endian == 0x01020304);
@@ -1215,12 +1214,12 @@ public class Level : MonoBehaviour
                     uint fcount = reader.ReadUInt32();  
                     uint lcount = reader.ReadUInt32();
                     
-                    // NEW: Read texture filename (version 4 feature)
+                    // Read texture filename
                     uint textureFilenameLength = reader.ReadUInt32();
                     byte[] textureFilenameBytes = reader.ReadBytes((int)textureFilenameLength);
                     string textureFilename = System.Text.Encoding.UTF8.GetString(textureFilenameBytes);
                     
-                    // NEW: Read texture filter mode (version 4 feature)
+                    // Read texture filter mode
                     byte filterMode = reader.ReadByte();
                     string filterName = (filterMode == 0) ? "nearest" : "bilinear";
                     
@@ -1297,7 +1296,7 @@ public class Level : MonoBehaviour
             using (FileStream fs = new FileStream(filePath, FileMode.Open, FileAccess.Read))
             using (BinaryReader reader = new BinaryReader(fs))
             {
-                Debug.Log("=== EMU FILE STRUCTURE DUMP (VERSION 4 FORMAT) ===");
+                Debug.Log("=== EMU FILE STRUCTURE DUMP ===");
                 Debug.Log($"File size: {fs.Length} bytes");
                 
                 // Header (12 bytes)
@@ -1315,12 +1314,12 @@ public class Level : MonoBehaviour
                 Debug.Log($"Counts: vertices={vertexCount}, faces={faceCount}, leaves={leafCount}");
                 Debug.Log($"Position after counts: {fs.Position} bytes");
                 
-                // NEW: Texture filename (version 4 feature)
+                // Read texture filename
                 uint textureFilenameLength = reader.ReadUInt32();
                 byte[] textureFilenameBytes = reader.ReadBytes((int)textureFilenameLength);
                 string textureFilename = System.Text.Encoding.UTF8.GetString(textureFilenameBytes);
                 
-                // NEW: Texture filter mode (version 4 feature)
+                // Read texture filter mode
                 byte filterMode = reader.ReadByte();
                 string filterName = (filterMode == 0) ? "nearest" : "bilinear";
                 

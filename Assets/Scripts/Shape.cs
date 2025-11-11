@@ -34,12 +34,24 @@ public abstract class Shape : MonoBehaviour
     [Tooltip("Global multiplier applied to stroke/outline thickness when generating meshes (for quick exaggeration). 1 = no change.")]
     public float debugStrokeMultiplier = 1f;
 
+    [Header("Animation Recording")]
+    [Tooltip("Enable animation recording for this shape")]
+    public bool recordAnimation = false;
+    [Tooltip("Framerate for animation recording")]
+    public float animationFramerate = 30f;
+
     [Header("Export Settings")]
     [Tooltip("Base filename for generated .rat and .act files (auto-generated from transform name if empty).")]
     public string baseFilename = "";
     
     [Tooltip("Automatically generate .rat and .act files when the shape changes.")]
     public bool autoExportForCEngine = true;
+
+    // Animation recording data
+    private bool isRecordingAnimation = false;
+    private float recordingStartTime;
+    private List<Mesh> animationFrames = new List<Mesh>();
+    private List<float> frameTimestamps = new List<float>();
 
     protected Mesh mesh; // cached mesh instance
     static Material _defaultVertexColorMat;
@@ -138,6 +150,185 @@ public abstract class Shape : MonoBehaviour
         }
     }
     
+    public void Update()
+    {
+        if (isRecordingAnimation && Application.isPlaying)
+        {
+            RecordAnimationFrame();
+        }
+    }
+
+    /// <summary>
+    /// Start recording animation frames for this shape
+    /// </summary>
+    public void StartAnimationRecording()
+    {
+        if (isRecordingAnimation)
+        {
+            Debug.LogWarning($"Shape '{name}': Animation recording already in progress");
+            return;
+        }
+
+        isRecordingAnimation = true;
+        recordingStartTime = Time.time;
+        animationFrames.Clear();
+        frameTimestamps.Clear();
+
+        Debug.Log($"Shape '{name}': Started animation recording at {animationFramerate} FPS");
+    }
+
+    /// <summary>
+    /// Stop recording animation and export to RAT/ACT files
+    /// </summary>
+    public void StopAnimationRecording()
+    {
+        if (!isRecordingAnimation)
+        {
+            Debug.LogWarning($"Shape '{name}': No animation recording in progress");
+            return;
+        }
+
+        isRecordingAnimation = false;
+
+        if (animationFrames.Count == 0)
+        {
+            Debug.LogWarning($"Shape '{name}': No animation frames recorded");
+            return;
+        }
+
+        Debug.Log($"Shape '{name}': Stopped animation recording - {animationFrames.Count} frames captured");
+
+        // Export the recorded animation
+        ExportRecordedAnimation();
+    }
+
+    /// <summary>
+    /// Record a single animation frame
+    /// </summary>
+    private void RecordAnimationFrame()
+    {
+        float currentTime = Time.time - recordingStartTime;
+        float frameInterval = 1f / animationFramerate;
+
+        // Check if it's time to record a new frame
+        if (frameTimestamps.Count == 0 || currentTime >= frameTimestamps[frameTimestamps.Count - 1] + frameInterval)
+        {
+            // Create a copy of the current mesh
+            Mesh frameMesh = Object.Instantiate(mesh);
+            frameMesh.name = $"{mesh.name}_frame_{animationFrames.Count}";
+
+            animationFrames.Add(frameMesh);
+            frameTimestamps.Add(currentTime);
+
+            Debug.Log($"Shape '{name}': Recorded animation frame {animationFrames.Count} at time {currentTime:F3}s");
+        }
+    }
+
+    /// <summary>
+    /// Export the recorded animation frames to RAT and ACT files
+    /// </summary>
+    private void ExportRecordedAnimation()
+    {
+        if (animationFrames.Count == 0) return;
+
+        UpdateBaseFilename();
+
+        try
+        {
+            // Use the first frame as the reference for mesh structure
+            var referenceMesh = animationFrames[0];
+            var vertices = referenceMesh.vertices;
+            var triangles = referenceMesh.triangles;
+            var uvs = referenceMesh.uv.Length > 0 ? referenceMesh.uv : new Vector2[vertices.Length];
+            var colors = referenceMesh.colors.Length > 0 ? referenceMesh.colors : new Color[vertices.Length];
+
+            // Fill in defaults if needed
+            if (uvs.Length != vertices.Length)
+            {
+                uvs = new Vector2[vertices.Length];
+                for (int i = 0; i < vertices.Length; i++)
+                {
+                    uvs[i] = new Vector2(0.5f, 0.5f);
+                }
+            }
+
+            if (colors.Length != vertices.Length)
+            {
+                colors = new Color[vertices.Length];
+                for (int i = 0; i < vertices.Length; i++)
+                {
+                    colors[i] = color;
+                }
+            }
+
+            // Convert triangles to ushort indices
+            var indices = new ushort[triangles.Length];
+            for (int i = 0; i < triangles.Length; i++)
+            {
+                indices[i] = (ushort)triangles[i];
+            }
+
+            // Convert animation frames to vertex arrays
+            var frames = new List<Vector3[]>();
+            foreach (var frameMesh in animationFrames)
+            {
+                frames.Add(frameMesh.vertices);
+            }
+
+            // Generate texture filename
+            string textureFilename = $"assets/{baseFilename}.png";
+            string meshDataFilename = $"{baseFilename}.ratmesh";
+
+            // Compress animation data
+            var compressed = Rat.CommandLine.GLBToRAT.CompressFrames(
+                frames, indices, uvs, colors, textureFilename, meshDataFilename);
+
+            // Write RAT file with size splitting
+            var createdRatFiles = Rat.Tool.WriteRatFileWithSizeSplitting(baseFilename, compressed, 64);
+
+            // Create Actor animation data for the .act file
+            var actorData = new ActorAnimationData();
+            actorData.framerate = animationFramerate;
+            actorData.ratFilePaths.AddRange(createdRatFiles.ConvertAll(path => System.IO.Path.GetFileName(path)));
+
+            // Create transform keyframes for each animation frame
+            for (int i = 0; i < animationFrames.Count; i++)
+            {
+                var transformKeyframe = new ActorTransformFloat
+                {
+                    position = new Vector3(transform.position.x, transform.position.y, -transform.position.z),
+                    rotation = transform.eulerAngles,
+                    scale = transform.lossyScale,
+                    rat_file_index = 0,
+                    rat_local_frame = (uint)i
+                };
+                actorData.transforms.Add(transformKeyframe);
+            }
+
+            // Save .act file
+            string actFilePath = $"GeneratedData/{baseFilename}.act";
+            Actor.SaveActorData(actFilePath, actorData, embedMeshData: false);
+
+            Debug.Log($"Shape '{name}': Exported animation to .act file system:");
+            Debug.Log($"  - Frames: {animationFrames.Count}, Duration: {(animationFrames.Count / animationFramerate):F2}s");
+            Debug.Log($"  - RAT files: {string.Join(", ", createdRatFiles)}");
+            Debug.Log($"  - ACT file: {actFilePath}");
+
+            // Clean up recorded frames
+            foreach (var frameMesh in animationFrames)
+            {
+                Object.Destroy(frameMesh);
+            }
+            animationFrames.Clear();
+            frameTimestamps.Clear();
+
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Shape '{name}': Failed to export recorded animation: {e.Message}");
+        }
+    }
+
     /// <summary>
     /// Export this shape as .rat and .act files for the C engine.
     /// Creates a single-frame animation with the current mesh state.
@@ -148,85 +339,8 @@ public abstract class Shape : MonoBehaviour
         
         UpdateBaseFilename();
         
-        try
-        {
-            // Get current mesh data
-            var vertices = mesh.vertices;
-            var triangles = mesh.triangles;
-            var uvs = mesh.uv.Length > 0 ? mesh.uv : new Vector2[vertices.Length];
-            var colors = mesh.colors.Length > 0 ? mesh.colors : new Color[vertices.Length];
-            
-            // Fill in defaults if needed
-            if (uvs.Length != vertices.Length)
-            {
-                uvs = new Vector2[vertices.Length];
-                for (int i = 0; i < vertices.Length; i++)
-                {
-                    uvs[i] = new Vector2(0.5f, 0.5f); // Default UV
-                }
-            }
-            
-            if (colors.Length != vertices.Length)
-            {
-                colors = new Color[vertices.Length];
-                for (int i = 0; i < vertices.Length; i++)
-                {
-                    colors[i] = color; // Use shape's base color
-                }
-            }
-            
-            // Convert triangles to ushort indices
-            var indices = new ushort[triangles.Length];
-            for (int i = 0; i < triangles.Length; i++)
-            {
-                indices[i] = (ushort)triangles[i];
-            }
-            
-            // Create single-frame animation
-            var frames = new List<Vector3[]> { vertices };
-            
-            // Generate texture filename
-            string textureFilename = $"assets/{baseFilename}.png";
-            string meshDataFilename = $"{baseFilename}.ratmesh";
-            
-            // Compress animation data
-            var compressed = Rat.CommandLine.GLBToRAT.CompressFrames(
-                frames, indices, uvs, colors, textureFilename, meshDataFilename);
-            
-            // Write RAT file with size splitting
-            string ratFilePath = $"GeneratedData/{baseFilename}.rat";
-            var createdRatFiles = Rat.Tool.WriteRatFileWithSizeSplitting(baseFilename, compressed, 64);
-            
-            // Create Actor animation data for the .act file
-            var actorData = new ActorAnimationData();
-            actorData.framerate = 30.0f; // Static shape, framerate doesn't matter
-            actorData.ratFilePaths.AddRange(createdRatFiles.ConvertAll(path => System.IO.Path.GetFileName(path)));
-            
-            // Create single transform keyframe for the shape
-            var transform = new ActorTransformFloat
-            {
-                position = this.transform.position,
-                rotation = this.transform.eulerAngles,
-                scale = this.transform.localScale,
-                rat_file_index = 0,
-                rat_local_frame = 0
-            };
-            actorData.transforms.Add(transform);
-            
-            // Save .act file
-            string actFilePath = $"GeneratedData/{baseFilename}.act";
-            Actor.SaveActorData(actFilePath, actorData);
-            
-            Debug.Log($"Shape '{name}': Exported to .act file system:");
-            Debug.Log($"  - RAT files: {string.Join(", ", createdRatFiles)}");
-            Debug.Log($"  - ACT file: {actFilePath}");
-            Debug.Log($"  - Texture: {textureFilename}");
-            
-        }
-        catch (System.Exception e)
-        {
-            Debug.LogError($"Shape '{name}': Failed to export for C engine: {e.Message}");
-        }
+        // Use the Actor utility function to handle the export
+        Actor.ExportMeshToRatAct(baseFilename, mesh, transform, color);
     }
 
     protected virtual void Reset()

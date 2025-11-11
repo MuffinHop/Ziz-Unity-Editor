@@ -690,9 +690,9 @@ public class SDFParticleRecorder : MonoBehaviour
 
             ActorTransformFloat transform = new ActorTransformFloat
             {
-                position = this.transform.position,
+                position = new Vector3(this.transform.position.x, this.transform.position.y, -this.transform.position.z), // Flip Z for right-handed coordinates
                 rotation = this.transform.eulerAngles,
-                scale = this.transform.localScale,
+                scale = this.transform.lossyScale,
                 rat_file_index = currentFileIndex,
                 rat_local_frame = localFrameIndex
             };

@@ -13,12 +13,16 @@ using UnityEditor;
 /// <summary>
 /// Binary file header for Actor data files (.act) 
 /// Compatible with C-based engines
+/// 
+/// Current format (version 5): Mesh data (UVs, colors, indices) is EMBEDDED in the .act file.
+/// This eliminates the need for separate .ratmodel files - everything is in .act and .rat files.
+/// Only version 5 is supported - older versions are not supported.
 /// </summary>
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 public struct ActorHeader
 {
     public uint magic;              // 'ACTR' = 0x52544341
-    public uint version;            // File format version (5 - includes rendering mode)
+    public uint version;            // File format version (always 5)
     public uint num_rat_files;      // Number of RAT files referenced
     public uint rat_filenames_length; // Total length of all RAT filename strings
     public uint num_keyframes;      // Number of transform keyframes
@@ -30,7 +34,7 @@ public struct ActorHeader
     public float position_max_x, position_max_y, position_max_z;
     public float scale_min, scale_max;
     
-    // New mesh data offsets and counts
+    // Embedded mesh data offsets and counts (replaces separate .ratmodel files)
     public uint num_vertices;       // Number of vertices in mesh
     public uint num_indices;        // Number of triangle indices
     public uint mesh_uvs_offset;    // Offset to UV data
@@ -886,7 +890,7 @@ public class Actor : MonoBehaviour
         
         var transform = new ActorTransformFloat
         {
-            position = position,
+            position = new Vector3(position.x, position.y, -position.z), // Flip Z for right-handed coordinates
             rotation = rotation,
             scale = scale,
             rat_file_index = 0, // Will be updated later when RAT files are created
@@ -1007,7 +1011,7 @@ public class Actor : MonoBehaviour
     /// Saves actor animation data to a binary file with 16-bit fixed-point compression
     /// and embedded mesh data (Version 5 format with rendering mode)
     /// </summary>
-    public static void SaveActorData(string filePath, ActorAnimationData data, ActorRenderingMode renderingMode = ActorRenderingMode.TextureWithDirectionalLight)
+    public static void SaveActorData(string filePath, ActorAnimationData data, ActorRenderingMode renderingMode = ActorRenderingMode.TextureWithDirectionalLight, bool embedMeshData = true)
     {
         if (data.transforms.Count == 0)
         {
@@ -1031,28 +1035,44 @@ public class Actor : MonoBehaviour
         }
         
         // Get mesh data - we'll need to extract this from the RAT files or generate default data
-        var meshData = ExtractMeshDataFromRatFiles(data.ratFilePaths);
+        var meshData = embedMeshData ? ExtractMeshDataFromRatFiles(data.ratFilePaths) : (new Rat.VertexUV[0], new Rat.VertexColor[0], new ushort[0], "");
         
-        // Ensure meshData components are never null
-        if (meshData.uvs == null || meshData.uvs.Length == 0)
+        // Extract mesh data components
+        var meshUvs = meshData.Item1;
+        var meshColors = meshData.Item2;
+        var meshIndices = meshData.Item3;
+        var textureFilename = meshData.Item4;
+        
+        // Ensure meshData components are never null (only if embedding mesh data)
+        if (embedMeshData)
         {
-            meshData.uvs = new Rat.VertexUV[] { new Rat.VertexUV { u = 0, v = 0 } };
+            if (meshUvs == null || meshUvs.Length == 0)
+            {
+                meshUvs = new Rat.VertexUV[] { new Rat.VertexUV { u = 0, v = 0 } };
+            }
+            if (meshColors == null || meshColors.Length == 0)
+            {
+                meshColors = new Rat.VertexColor[] { new Rat.VertexColor { r = 1, g = 1, b = 1, a = 1 } };
+            }
+            if (meshIndices == null || meshIndices.Length == 0)
+            {
+                meshIndices = new ushort[] { 0 };
+            }
         }
-        if (meshData.colors == null || meshData.colors.Length == 0)
+        else
         {
-            meshData.colors = new Rat.VertexColor[] { new Rat.VertexColor { r = 1, g = 1, b = 1, a = 1 } };
+            // For non-embedded mesh data, use empty arrays
+            meshUvs = meshUvs ?? new Rat.VertexUV[0];
+            meshColors = meshColors ?? new Rat.VertexColor[0];
+            meshIndices = meshIndices ?? new ushort[0];
         }
-        if (meshData.indices == null || meshData.indices.Length == 0)
+        if (textureFilename == null)
         {
-            meshData.indices = new ushort[] { 0 };
-        }
-        if (meshData.textureFilename == null)
-        {
-            meshData.textureFilename = "";
+            textureFilename = "";
         }
         
         // Ensure texture is saved if rendering mode requires it
-        if (RequiresTexture(renderingMode) && string.IsNullOrEmpty(meshData.textureFilename))
+        if (RequiresTexture(renderingMode) && string.IsNullOrEmpty(textureFilename))
         {
             Debug.LogWarning("Rendering mode requires texture but none found in RAT data. Texture will be empty in .act file.");
         }
@@ -1110,16 +1130,16 @@ public class Actor : MonoBehaviour
             Debug.Log($"  ASCII: {asciiDump}");
             
             // Convert texture filename to UTF-8 bytes
-            byte[] textureFilenameBytes = Encoding.UTF8.GetBytes(meshData.textureFilename ?? "");
+            byte[] textureFilenameBytes = Encoding.UTF8.GetBytes(textureFilename ?? "");
             
             // Calculate offsets
             uint headerSize = (uint)Marshal.SizeOf<ActorHeader>();
             uint ratFilenamesOffset = headerSize;
-            uint meshUvsOffset = ratFilenamesOffset + (uint)allRatFileNames.Length;
-            uint meshColorsOffset = meshUvsOffset + (uint)(meshData.uvs.Length * 8); // 2 floats per UV
-            uint meshIndicesOffset = meshColorsOffset + (uint)(meshData.colors.Length * 16); // 4 floats per color
-            uint textureFilenameOffset = meshIndicesOffset + (uint)(meshData.indices.Length * 2); // 2 bytes per index
-            uint transformsOffset = textureFilenameOffset + (uint)textureFilenameBytes.Length;
+            uint meshUvsOffset = embedMeshData ? (ratFilenamesOffset + (uint)allRatFileNames.Length) : 0;
+            uint meshColorsOffset = embedMeshData ? (meshUvsOffset + (uint)(meshUvs.Length * 8)) : 0; // 2 floats per UV
+            uint meshIndicesOffset = embedMeshData ? (meshColorsOffset + (uint)(meshColors.Length * 16)) : 0; // 4 floats per color
+            uint textureFilenameOffset = embedMeshData ? (meshIndicesOffset + (uint)(meshIndices.Length * 2)) : 0; // 2 bytes per index
+            uint transformsOffset = embedMeshData ? (textureFilenameOffset + (uint)textureFilenameBytes.Length) : (ratFilenamesOffset + (uint)allRatFileNames.Length);
             
             // Create header (version 5 for embedded mesh data and rendering mode)
             var header = new ActorHeader
@@ -1138,13 +1158,13 @@ public class Actor : MonoBehaviour
                 scale_min = scaleMin, scale_max = scaleMax,
                 
                 // Mesh data information
-                num_vertices = (uint)meshData.uvs.Length,
-                num_indices = (uint)meshData.indices.Length,
-                mesh_uvs_offset = meshUvsOffset,
-                mesh_colors_offset = meshColorsOffset,
-                mesh_indices_offset = meshIndicesOffset,
-                texture_filename_offset = textureFilenameOffset,
-                texture_filename_length = (uint)textureFilenameBytes.Length,
+                num_vertices = embedMeshData ? (uint)meshUvs.Length : 0,
+                num_indices = embedMeshData ? (uint)meshIndices.Length : 0,
+                mesh_uvs_offset = embedMeshData ? meshUvsOffset : 0,
+                mesh_colors_offset = embedMeshData ? meshColorsOffset : 0,
+                mesh_indices_offset = embedMeshData ? meshIndicesOffset : 0,
+                texture_filename_offset = embedMeshData ? textureFilenameOffset : 0,
+                texture_filename_length = embedMeshData ? (uint)textureFilenameBytes.Length : 0,
                 
                 // Rendering mode
                 rendering_mode = (byte)renderingMode,
@@ -1162,32 +1182,36 @@ public class Actor : MonoBehaviour
                 Debug.Log($"ACT Export: Wrote {allRatFileNames.Length} bytes of RAT filenames at offset {ratFilenamesOffset}");
             }
             
-            // Write mesh UV data
-            foreach (var uv in meshData.uvs)
+            // Write mesh data only if embedding
+            if (embedMeshData)
             {
-                writer.Write(uv.u);
-                writer.Write(uv.v);
-            }
-            
-            // Write mesh color data
-            foreach (var color in meshData.colors)
-            {
-                writer.Write(color.r);
-                writer.Write(color.g);
-                writer.Write(color.b);
-                writer.Write(color.a);
-            }
-            
-            // Write mesh indices
-            foreach (var index in meshData.indices)
-            {
-                writer.Write(index);
-            }
-            
-            // Write texture filename
-            if (textureFilenameBytes.Length > 0)
-            {
-                writer.Write(textureFilenameBytes);
+                // Write mesh UV data
+                foreach (var uv in meshUvs)
+                {
+                    writer.Write(uv.u);
+                    writer.Write(uv.v);
+                }
+                
+                // Write mesh color data
+                foreach (var color in meshColors)
+                {
+                    writer.Write(color.r);
+                    writer.Write(color.g);
+                    writer.Write(color.b);
+                    writer.Write(color.a);
+                }
+                
+                // Write mesh indices
+                foreach (var index in meshIndices)
+                {
+                    writer.Write(index);
+                }
+                
+                // Write texture filename
+                if (textureFilenameBytes.Length > 0)
+                {
+                    writer.Write(textureFilenameBytes);
+                }
             }
             
             // Write transform data converted to 16-bit fixed-point
@@ -1217,9 +1241,9 @@ public class Actor : MonoBehaviour
             }
         }
         
-        Debug.Log($"Saved Actor data (v5 with embedded mesh and rendering mode): {data.transforms.Count} keyframes, {meshData.uvs.Length} vertices");
+        Debug.Log($"Saved Actor data (v5{(embedMeshData ? " with embedded mesh" : " without embedded mesh")}, rendering mode): {data.transforms.Count} keyframes, {meshUvs.Length} vertices");
         Debug.Log($"  - Rendering mode: {renderingMode}");
-        Debug.Log($"  - Texture: {meshData.textureFilename}");
+        Debug.Log($"  - Texture: {textureFilename}");
         Debug.Log($"  - RAT files: {string.Join(", ", data.ratFilePaths)}");
     }
 
@@ -1342,7 +1366,8 @@ public class Actor : MonoBehaviour
             
         var keyframe = AnimationData.transforms[(int)keyframeIndex];
         
-        transform.position = keyframe.position;
+        // Convert from right-handed coordinates back to Unity left-handed
+        transform.position = new Vector3(keyframe.position.x, keyframe.position.y, -keyframe.position.z);
         transform.eulerAngles = keyframe.rotation;
         transform.localScale = keyframe.scale;
     }
@@ -1519,5 +1544,105 @@ public class Actor : MonoBehaviour
         }
         
         return allFilesValid;
+    }
+    
+    /// <summary>
+    /// Static utility function to export a mesh (single frame) to RAT and ACT files.
+    /// This encapsulates the common logic for exporting mesh data to the C engine format.
+    /// Used by Shape.ExportForCEngine() and can be used for any single-frame mesh export.
+    /// </summary>
+    /// <param name="baseFilename">Base filename for the exported files</param>
+    /// <param name="mesh">Unity mesh to export</param>
+    /// <param name="transform">Transform of the object</param>
+    /// <param name="objectColor">Base color of the object</param>
+    /// <param name="renderingMode">Rendering mode for the ACT file</param>
+    public static void ExportMeshToRatAct(string baseFilename, Mesh mesh, Transform transform, Color objectColor, ActorRenderingMode renderingMode = ActorRenderingMode.TextureWithDirectionalLight)
+    {
+        if (mesh == null)
+        {
+            Debug.LogError("ExportStaticShape: Mesh is null!");
+            return;
+        }
+        
+        try
+        {
+            // Prepare mesh data using existing Rat utilities
+            var vertices = mesh.vertices;
+            var triangles = mesh.triangles;
+            var uvs = mesh.uv.Length > 0 ? mesh.uv : new Vector2[vertices.Length];
+            var colors = mesh.colors.Length > 0 ? mesh.colors : new Color[vertices.Length];
+            
+            // Fill in defaults if needed (this logic is Shape-specific but minimal)
+            if (uvs.Length != vertices.Length)
+            {
+                uvs = new Vector2[vertices.Length];
+                for (int i = 0; i < vertices.Length; i++)
+                {
+                    uvs[i] = new Vector2(0.5f, 0.5f); // Default UV
+                }
+            }
+            
+            if (colors.Length != vertices.Length)
+            {
+                colors = new Color[vertices.Length];
+                for (int i = 0; i < vertices.Length; i++)
+                {
+                    colors[i] = objectColor; // Use object's base color
+                }
+            }
+            
+            // Convert triangles to ushort indices
+            var indices = new ushort[triangles.Length];
+            for (int i = 0; i < triangles.Length; i++)
+            {
+                indices[i] = (ushort)triangles[i];
+            }
+            
+            // Create single-frame animation
+            var frames = new List<Vector3[]> { vertices };
+            
+            // Generate texture filename
+            string textureFilename = $"assets/{baseFilename}.png";
+            string meshDataFilename = $"{baseFilename}.ratmesh";
+            
+            // Compress animation data using Rat utilities
+            var compressed = Rat.CommandLine.GLBToRAT.CompressFrames(
+                frames, indices, uvs, colors, textureFilename, meshDataFilename);
+            
+            // Write RAT file with size splitting using Rat utilities
+            var createdRatFiles = Rat.Tool.WriteRatFileWithSizeSplitting(baseFilename, compressed, 64);
+            
+            // Create Actor animation data for the .act file
+            var actorData = new ActorAnimationData();
+            actorData.framerate = 30.0f; // Static shape, framerate doesn't matter
+            actorData.ratFilePaths.AddRange(createdRatFiles.ConvertAll(path => System.IO.Path.GetFileName(path)));
+            
+            // Create single transform keyframe for the shape
+            var transformKeyframe = new ActorTransformFloat
+            {
+                position = new Vector3(transform.position.x, transform.position.y, -transform.position.z), // Flip Z for right-handed coordinates
+                rotation = transform.eulerAngles,
+                scale = transform.lossyScale,
+                rat_file_index = 0,
+                rat_local_frame = 0
+            };
+            actorData.transforms.Add(transformKeyframe);
+            
+            Debug.Log($"ExportStaticShape '{baseFilename}': Transform - pos {transformKeyframe.position:F2}, rot {transformKeyframe.rotation:F2}, scale {transformKeyframe.scale:F2}");
+            
+            // Save .act file using Actor utilities
+            string actFilePath = $"GeneratedData/{baseFilename}.act";
+            SaveActorData(actFilePath, actorData, renderingMode, embedMeshData: false);
+            
+            Debug.Log($"ExportStaticShape '{baseFilename}': Exported to .act file system:");
+            Debug.Log($"  - RAT files: {string.Join(", ", createdRatFiles)}");
+            Debug.Log($"  - ACT file: {actFilePath}");
+            Debug.Log($"  - Texture: {textureFilename}");
+            
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"ExportStaticShape '{baseFilename}': Failed to export: {e.Message}");
+        }
     }
 }

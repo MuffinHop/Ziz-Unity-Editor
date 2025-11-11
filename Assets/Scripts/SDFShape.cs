@@ -143,7 +143,7 @@ public class SDFShape : MonoBehaviour
             if (!frameTransforms.ContainsKey(frame))
                 frameTransforms[frame] = new Dictionary<SDFShape, TransformData>();
             frameTransforms[frame][this] = new TransformData {
-                position = transform.position,
+                position = new Vector3(transform.position.x, transform.position.y, -transform.position.z), // Flip Z for right-handed coordinates
                 rotation = transform.rotation,
                 scale = transform.localScale,
                 time = Time.time // record timestamp for resampling
@@ -767,6 +767,7 @@ public class SDFShape : MonoBehaviour
             Debug.Log($"Processing shape '{gameObjectName}' using detailed texture: {detailedTextureFilename} ({group.Count()} instance(s))");
 
             List<Vector3[]> allFramesVertices = new List<Vector3[]>();
+            List<TransformData> allFramesTransforms = new List<TransformData>();
             int vertexCount = quadMesh.vertexCount;
 
             // Sort frames by frame number
@@ -796,6 +797,7 @@ public class SDFShape : MonoBehaviour
                     {
                         vertices[i] = matrix.MultiplyPoint3x4(quadMesh.vertices[i]);
                     }
+                    allFramesTransforms.Add(shapeTransform.Value);
                 }
                 else
                 {
@@ -804,6 +806,8 @@ public class SDFShape : MonoBehaviour
                     {
                         vertices[i] = Vector3.zero;
                     }
+                    // Add identity transform for missing frames
+                    allFramesTransforms.Add(new TransformData { position = Vector3.zero, rotation = Quaternion.identity, scale = Vector3.one, time = 0 });
                 }
                 allFramesVertices.Add(vertices);
             }
@@ -819,7 +823,8 @@ public class SDFShape : MonoBehaviour
                 
                 if (anim != null)
                 {
-                    // Assign the mesh and detailed texture filenames for the V3 format
+                    // Assign mesh and texture filenames
+                    // Note: mesh_data_filename is referenced by RAT but actual mesh data is embedded in .act file
                     anim.mesh_data_filename = $"{baseRatFilename}.ratmesh";
                     anim.texture_filename = detailedTextureFilename; // Use detailed texture name
 
@@ -852,11 +857,18 @@ public class SDFShape : MonoBehaviour
                             rat_local_frame = (uint)i
                         };
                         actorData.transforms.Add(transform);
+                        
+                        // Debug: show what the recorded transform was for this frame
+                        if (i < allFramesTransforms.Count)
+                        {
+                            var recordedTransform = allFramesTransforms[i];
+                            Debug.Log($"SDFShape '{gameObjectName}' frame {i}: Recorded transform - pos {recordedTransform.position:F2}, rot {recordedTransform.rotation.eulerAngles:F2}, scale {recordedTransform.scale:F2}");
+                        }
                     }
                     
                     // Save .act file to ROOT GeneratedData directory using GameObject name
                     string actFilePath = System.IO.Path.Combine(GetGeneratedDataPath(), $"{gameObjectName}.act");
-                    Actor.SaveActorData(actFilePath, actorData, ActorRenderingMode.TextureOnly);
+                    Actor.SaveActorData(actFilePath, actorData, ActorRenderingMode.TextureOnly, embedMeshData: false);
                     
                     Debug.Log($"Created .act file for shape '{gameObjectName}': {actFilePath}");
                     Debug.Log($"  - RAT files: {string.Join(", ", createdFiles.Select(f => System.IO.Path.GetFileName(f)))}");

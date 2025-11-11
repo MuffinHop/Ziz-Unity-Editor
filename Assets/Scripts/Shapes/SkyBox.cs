@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
+using System.IO;
+using System.Linq;
 
 namespace ZizSceneEditor.Assets.Scripts.Shapes
 {
@@ -394,5 +396,128 @@ namespace ZizSceneEditor.Assets.Scripts.Shapes
             m.normals = normals;
             return m;
         }
+
+        /// <summary>
+        /// Context menu hook to export the SkyBox mesh as a .rat file
+        /// </summary>
+        [ContextMenu("Export SkyBox to RAT")]
+        public void ExportToRAT()
+        {
+            var meshFilter = GetComponent<MeshFilter>();
+            if (meshFilter == null || meshFilter.sharedMesh == null)
+            {
+                Debug.LogError("SkyBox: No mesh found to export!");
+                return;
+            }
+
+            var mesh = meshFilter.sharedMesh;
+            
+            // Create single frame data (static mesh)
+            var frames = new List<UnityEngine.Vector3[]>();
+            frames.Add(mesh.vertices);
+            
+            // Use mesh colors, generate default UVs if none exist
+            var colors = mesh.colors.Length > 0 ? mesh.colors : null;
+            var uvs = mesh.uv.Length > 0 ? mesh.uv : GenerateDefaultUVs(mesh.vertices.Length);
+            
+            // Compress using RAT (single frame)
+            var compressed = Rat.Tool.CompressFromFrames(frames, mesh, uvs, colors);
+            if (compressed == null)
+            {
+                Debug.LogError("SkyBox: RAT compression failed!");
+                return;
+            }
+            
+            // Set filenames (no texture for vertex-colored skybox)
+            // Note: mesh_data_filename is referenced by RAT but actual mesh data is embedded in .act file
+            compressed.texture_filename = "";
+            compressed.mesh_data_filename = $"{gameObject.name}.ratmesh";
+            
+            // Save to GeneratedData directory
+            string generatedDataPath = System.IO.Path.Combine(Application.dataPath.Replace("Assets", ""), "GeneratedData");
+            if (!System.IO.Directory.Exists(generatedDataPath))
+                System.IO.Directory.CreateDirectory(generatedDataPath);
+            
+            string basePath = System.IO.Path.Combine(generatedDataPath, gameObject.name);
+            var createdFiles = Rat.Tool.WriteRatFileWithSizeSplitting(basePath, compressed);
+            
+            Debug.Log($"SkyBox: Exported to RAT - {createdFiles.Count} file(s): {string.Join(", ", createdFiles)}");
+            
+            // Create .act file for this SkyBox
+            ActorAnimationData actorData = new ActorAnimationData();
+            actorData.framerate = 30f; // Default framerate for static mesh
+            
+            // Add all RAT files to the actor data
+            foreach (string ratFile in createdFiles.Where(f => f.EndsWith(".rat")))
+            {
+                actorData.ratFilePaths.Add(System.IO.Path.GetFileName(ratFile));
+            }
+            
+            // Create a single transform keyframe using the SkyBox's actual transform
+            ActorTransformFloat transform = new ActorTransformFloat
+            {
+                position = new Vector3(this.transform.position.x, this.transform.position.y, -this.transform.position.z), // Flip Z for right-handed coordinates
+                rotation = this.transform.eulerAngles,
+                scale = this.transform.lossyScale,
+                rat_file_index = 0,
+                rat_local_frame = 0
+            };
+            actorData.transforms.Add(transform);
+            
+            // Save .act file to root GeneratedData directory
+            string actFilePath = System.IO.Path.Combine(generatedDataPath, $"{gameObject.name}.act");
+            Actor.SaveActorData(actFilePath, actorData, ActorRenderingMode.VertexColoursOnly, embedMeshData: false);
+            
+            Debug.Log($"SkyBox: Created .act file: {actFilePath}");
+            Debug.Log($"  - RAT files: {string.Join(", ", createdFiles.Select(f => System.IO.Path.GetFileName(f)))}");
+        }
+        
+        /// <summary>
+        /// Generates default UV coordinates for a mesh (spherical mapping)
+        /// </summary>
+        private UnityEngine.Vector2[] GenerateDefaultUVs(int vertexCount)
+        {
+            var uvs = new UnityEngine.Vector2[vertexCount];
+            var vertices = GetComponent<MeshFilter>().sharedMesh.vertices;
+            
+            for (int i = 0; i < vertexCount; i++)
+            {
+                var v = vertices[i].normalized;
+                uvs[i] = new UnityEngine.Vector2(
+                    Mathf.Atan2(v.z, v.x) / (2 * Mathf.PI) + 0.5f,
+                    v.y * 0.5f + 0.5f
+                );
+            }
+            
+            return uvs;
+        }
+
+#if UNITY_EDITOR
+    [UnityEditor.InitializeOnLoad]
+    private static class SkyBoxInitializer
+    {
+        static SkyBoxInitializer()
+        {
+            UnityEditor.EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
+        }
+
+        private static void OnPlayModeStateChanged(UnityEditor.PlayModeStateChange state)
+        {
+            if (state == UnityEditor.PlayModeStateChange.ExitingPlayMode)
+            {
+                // Auto-export all SkyBox instances to RAT files when exiting play mode
+                var skyBoxes = UnityEngine.Object.FindObjectsOfType<SkyBox>();
+                if (skyBoxes.Length > 0)
+                {
+                    UnityEngine.Debug.Log($"Exiting play mode - auto-exporting {skyBoxes.Length} SkyBox(es) to RAT files...");
+                    foreach (var skyBox in skyBoxes)
+                    {
+                        skyBox.ExportToRAT();
+                    }
+                }
+            }
+        }
     }
-} 
+#endif
+    }
+}

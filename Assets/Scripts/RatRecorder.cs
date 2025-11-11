@@ -213,6 +213,15 @@ public class RatRecorder : MonoBehaviour
             targetSkinnedMeshRenderer.BakeMesh(_tempMesh);
             frameVertices = _tempMesh.vertices;
             
+            // Convert vertices from Unity left-handed to right-handed coordinates
+            if (frameVertices != null)
+            {
+                for (int i = 0; i < frameVertices.Length; i++)
+                {
+                    frameVertices[i] = new Vector3(frameVertices[i].x, frameVertices[i].y, -frameVertices[i].z);
+                }
+            }
+            
             // Debug: Check if the baked mesh has valid triangle data (only for first frame to avoid spam)
             if (_recordedFrames.Count == 0)
             {
@@ -248,6 +257,15 @@ public class RatRecorder : MonoBehaviour
         {
             // For regular meshes, we can just grab the vertices directly.
             frameVertices = targetMeshFilter.mesh.vertices;
+        }
+        
+        // Convert vertices from Unity left-handed to right-handed coordinates
+        if (frameVertices != null)
+        {
+            for (int i = 0; i < frameVertices.Length; i++)
+            {
+                frameVertices[i] = new Vector3(frameVertices[i].x, frameVertices[i].y, -frameVertices[i].z);
+            }
         }
         
         // Debug: Log capture information for first few frames

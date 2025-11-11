@@ -196,6 +196,9 @@ namespace Rat
             return (value & signBit) != 0 ? (int)(value | (~0U << bits)) : (int)value;
         }
 
+        /// <summary>
+        /// Reads a RAT3 format file from disk. Only RAT3 format is supported.
+        /// </summary>
         public static CompressedAnimation ReadRatFile(string filepath)
         {
             using (var stream = new FileStream(filepath, FileMode.Open, FileAccess.Read))
@@ -204,12 +207,10 @@ namespace Rat
             }
         }
 
+        /// <summary>
+        /// Reads a RAT3 format file from a stream. Only RAT3 format is supported.
+        /// </summary>
         public static CompressedAnimation ReadRatFile(Stream stream, string filepath = null)
-        {
-            return ReadRatFileV3(stream, filepath);
-        }
-
-        public static CompressedAnimation ReadRatFileV3(Stream stream, string filepath)
         {
             using (var reader = new BinaryReader(stream))
             {
@@ -342,6 +343,10 @@ namespace Rat
             return (byte)bits;
         }
 
+        /// <summary>
+        /// Writes a RAT3 format file to a stream. Only RAT3 format is supported.
+        /// Mesh data (UVs, colors, indices) is embedded in .act files, not in .ratmodel files.
+        /// </summary>
         public static void WriteRatFile(Stream stream, CompressedAnimation anim, string meshDataFilename = null)
         {
             if (string.IsNullOrEmpty(meshDataFilename) && !string.IsNullOrEmpty(anim.mesh_data_filename))
@@ -351,6 +356,11 @@ namespace Rat
             WriteRatFileV3(stream, anim, meshDataFilename);
         }
         
+        /// <summary>
+        /// DEPRECATED: Mesh data is now embedded in .act files (version 5).
+        /// This method is kept for backward compatibility but should not be used.
+        /// </summary>
+        [Obsolete("Mesh data is now embedded in .act files. This method is deprecated.")]
         public static void WriteRatMeshFile(Stream stream, CompressedAnimation anim)
         {
             using (var writer = new BinaryWriter(stream))
@@ -388,7 +398,10 @@ namespace Rat
             }
         }
 
-        public static void WriteRatFileV3(Stream stream, CompressedAnimation anim, string meshDataFilename)
+        /// <summary>
+        /// Internal method to write RAT3 format. Use WriteRatFile() instead.
+        /// </summary>
+        private static void WriteRatFileV3(Stream stream, CompressedAnimation anim, string meshDataFilename)
         {
             using (var writer = new BinaryWriter(stream))
             {
@@ -454,22 +467,15 @@ namespace Rat
             int maxFileSize = maxFileSizeKB * KB;
             var createdFiles = new List<string>();
 
-            // V3: Write the separate .ratmesh file first, it is not split.
-            string meshDataFilename = $"{baseFilename}.ratmesh";
-            if (!string.IsNullOrEmpty(anim.mesh_data_filename))
-            {
-                using (var meshStream = new FileStream(meshDataFilename, FileMode.Create))
-                {
-                    WriteRatMeshFile(meshStream, anim);
-                }
-                createdFiles.Add(meshDataFilename);
-                UnityEngine.Debug.Log($"Created RAT mesh file: {meshDataFilename}");
-            }
+            // NOTE: Mesh data (UVs, colors, indices) is now embedded in .act files (version 5)
+            // We no longer create separate .ratmesh files
+            // The .rat file still references the mesh data filename for backward compatibility with C engine
 
             // Calculate static data sizes for the .rat file (V3 format)
             uint headerSize = (uint)Marshal.SizeOf(typeof(RatHeader));
             uint bitWidthsSize = anim.num_vertices * 3;
             uint firstFrameSize = anim.num_vertices * (uint)Marshal.SizeOf(typeof(VertexU8));
+            string meshDataFilename = !string.IsNullOrEmpty(anim.mesh_data_filename) ? anim.mesh_data_filename : $"{baseFilename}.ratmesh";
             byte[] meshDataFilenameBytes = System.Text.Encoding.UTF8.GetBytes(Path.GetFileName(meshDataFilename));
             uint rawFirstFrameSize = anim.isFirstFrameRaw ? anim.num_vertices * (uint)Marshal.SizeOf(typeof(UnityEngine.Vector3)) : 0;
             
