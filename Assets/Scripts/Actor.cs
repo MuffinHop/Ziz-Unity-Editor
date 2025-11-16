@@ -638,7 +638,7 @@ public class Actor : MonoBehaviour
     {
         position = transform.position;
         rotation = transform.eulerAngles;
-        scale = transform.localScale;
+    scale = transform.lossyScale;
         
         // Check if transform name changed and update filenames accordingly
         if (transform.name != lastTransformName)

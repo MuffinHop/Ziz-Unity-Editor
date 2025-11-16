@@ -335,7 +335,7 @@ public class RatRecorder : MonoBehaviour
             {
                 position = transform.position,
                 rotation = transform.eulerAngles,
-                scale = transform.localScale,
+                scale = transform.lossyScale,
                 rat_file_index = 0,
                 rat_local_frame = (uint)(_recordedFrames.Count - 1)
             });
@@ -366,7 +366,7 @@ public class RatRecorder : MonoBehaviour
             {
                 position = transform.position,
                 rotation = transform.eulerAngles,
-                scale = transform.localScale,
+                scale = transform.lossyScale,
                 rat_file_index = 0,
                 rat_local_frame = (uint)(_recordedFrames.Count - 1)
             });

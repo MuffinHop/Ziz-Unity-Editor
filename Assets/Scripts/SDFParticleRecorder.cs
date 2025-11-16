@@ -468,7 +468,7 @@ public class SDFParticleRecorder : MonoBehaviour
         }
 
         _recordedFrames.Add(frameData);
-    _recordedTransforms.Add(new Rat.ActorTransformFloat { position = transform.position, rotation = transform.eulerAngles, scale = transform.localScale, rat_file_index = 0, rat_local_frame = (uint)_recordedFrames.Count - 1 });
+    _recordedTransforms.Add(new Rat.ActorTransformFloat { position = transform.position, rotation = transform.eulerAngles, scale = transform.lossyScale, rat_file_index = 0, rat_local_frame = (uint)_recordedFrames.Count - 1 });
 
     }
 

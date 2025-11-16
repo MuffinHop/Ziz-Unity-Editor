@@ -108,14 +108,14 @@ public class AnimationRecorder : MonoBehaviour
         smr.BakeMesh(tempMesh);
         _frames.Add(tempMesh.vertices);
         // Capture transform for this frame to preserve transform motion during playback
-        _frameTransforms.Add(new Rat.ActorTransformFloat
-        {
-            position = transform.position,
-            rotation = transform.eulerAngles,
-            scale = transform.localScale,
-            rat_file_index = 0,
-            rat_local_frame = (uint)(_frames.Count - 1)
-        });
+            _frameTransforms.Add(new Rat.ActorTransformFloat
+            {
+                position = transform.position,
+                rotation = transform.eulerAngles,
+                scale = transform.lossyScale,
+                rat_file_index = 0,
+                rat_local_frame = (uint)(_frames.Count - 1)
+            });
         Destroy(tempMesh);
     }
     
@@ -128,7 +128,7 @@ public class AnimationRecorder : MonoBehaviour
         // Keep vertices in local space and let ExportAnimation bake transforms
         var verts = _sourceMesh.vertices.ToArray();
         _frames.Add(verts);
-        _frameTransforms.Add(new Rat.ActorTransformFloat { position = transform.position, rotation = transform.eulerAngles, scale = transform.localScale, rat_file_index = 0, rat_local_frame = (uint)(_frames.Count-1) });
+    _frameTransforms.Add(new Rat.ActorTransformFloat { position = transform.position, rotation = transform.eulerAngles, scale = transform.lossyScale, rat_file_index = 0, rat_local_frame = (uint)(_frames.Count-1) });
     }
     
     void CaptureParticleFrame()
@@ -153,7 +153,7 @@ public class AnimationRecorder : MonoBehaviour
         }
         
         _frames.Add(frameVerts.ToArray());
-        _frameTransforms.Add(new Rat.ActorTransformFloat { position = transform.position, rotation = transform.eulerAngles, scale = transform.localScale, rat_file_index = 0, rat_local_frame = (uint)(_frames.Count-1) });
+    _frameTransforms.Add(new Rat.ActorTransformFloat { position = transform.position, rotation = transform.eulerAngles, scale = transform.lossyScale, rat_file_index = 0, rat_local_frame = (uint)(_frames.Count-1) });
     }
     
     void CaptureStaticMeshFrame()
@@ -161,7 +161,7 @@ public class AnimationRecorder : MonoBehaviour
         var mf = GetComponent<MeshFilter>();
         if (_sourceMesh == null) _sourceMesh = mf.mesh;
         _frames.Add(_sourceMesh.vertices);
-        _frameTransforms.Add(new Rat.ActorTransformFloat { position = transform.position, rotation = transform.eulerAngles, scale = transform.localScale, rat_file_index = 0, rat_local_frame = (uint)(_frames.Count-1) });
+    _frameTransforms.Add(new Rat.ActorTransformFloat { position = transform.position, rotation = transform.eulerAngles, scale = transform.lossyScale, rat_file_index = 0, rat_local_frame = (uint)(_frames.Count-1) });
     }
     
     void StopRecording()

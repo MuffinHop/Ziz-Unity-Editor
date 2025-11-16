@@ -55,7 +55,10 @@ public class RecordCamera : MonoBehaviour
     
     // File format constants
     private const uint CAM_FILE_MAGIC = 0x43414D30; // "CAM0"
-    private const uint CAM_FILE_VERSION = 1;
+    private const uint CAM_FILE_VERSION = 2;
+    // Cam file flags
+    private const uint CAM_FLAG_FLIP_Z = 1u << 0;
+    private const uint CAM_FLAG_FLIP_ROT_WITH_Z = 1u << 1;
     
     void Start()
     {
@@ -225,6 +228,11 @@ public class RecordCamera : MonoBehaviour
                 writer.Write(CAM_FILE_VERSION);    // 4 bytes  
                 writer.Write((uint)keyframes.Count); // 4 bytes
                 writer.Write((uint)recordingFPS);  // 4 bytes - frame rate as integer
+                // Flags describe how data was exported. Useful for the C loader to preserve conventions
+                uint flags = 0;
+                if (flipZ) flags |= CAM_FLAG_FLIP_Z;
+                if (flipRotationWithZ) flags |= CAM_FLAG_FLIP_ROT_WITH_Z;
+                writer.Write(flags);                // 4 bytes - flags (v2+)
                 
                 // Write position bounds for decompression (6 floats = 24 bytes)
                 writer.Write(positionMin.x);       // 4 bytes
@@ -233,7 +241,7 @@ public class RecordCamera : MonoBehaviour
                 writer.Write(positionMax.x);       // 4 bytes
                 writer.Write(positionMax.y);       // 4 bytes
                 writer.Write(positionMax.z);       // 4 bytes
-                // Header total: 16 + 24 = 40 bytes
+                // Header total (v2): 16 + 4 + 24 = 44 bytes
                 
                 // Write keyframes - ensure exact struct layout without any padding
                 foreach (var keyframe in keyframes)
@@ -255,7 +263,7 @@ public class RecordCamera : MonoBehaviour
             } 
             
             long fileSize = new FileInfo(filePath).Length;
-            long expectedSize = 40 + (keyframes.Count * 13); // Header: 40 bytes, Keyframe: 13 bytes
+            long expectedSize = 44 + (keyframes.Count * 13); // Header: 44 bytes (v2), Keyframe: 13 bytes
             
             Debug.Log("Camera data saved");
             Debug.Log($"Saved {keyframes.Count} camera keyframes to {filePath}");
@@ -279,7 +287,7 @@ public class RecordCamera : MonoBehaviour
             }
             
             Debug.Log($"Binary layout: CameraKeyframe = posX(2) + posY(2) + posZ(2) + yaw(2) + pitch(2) + roll(2) + fov(1) = 13 bytes");
-            Debug.Log($"Header layout: magic(4) + version(4) + count(4) + fps(4) + position_bounds(24) = 40 bytes");
+            Debug.Log($"Header layout: magic(4) + version(4) + count(4) + fps(4) + flags(4) + position_bounds(24) = 44 bytes");
             Debug.Log("Copy this file to your C program's assets folder");
             Debug.Log("========================");
             
@@ -421,6 +429,10 @@ public class RecordCamera : MonoBehaviour
                 writer.Write(CAM_FILE_VERSION);    // 1
                 writer.Write((uint)testKeyframes.Count); // 2 keyframes
                 writer.Write((uint)30);            // 30 FPS as integer
+                uint tflags = 0;
+                if (flipZ) tflags |= CAM_FLAG_FLIP_Z;
+                if (flipRotationWithZ) tflags |= CAM_FLAG_FLIP_ROT_WITH_Z;
+                writer.Write(tflags);
                 
                 // Write position bounds
                 writer.Write(testMin.x);           // 1.0f
@@ -448,7 +460,7 @@ public class RecordCamera : MonoBehaviour
             
             long fileSize = new FileInfo(filePath).Length;
             Debug.Log($"Test file created: {filePath}");
-            Debug.Log($"Test file size: {fileSize} bytes (expected: 66 bytes)"); // 40 header + 2*13 keyframes
+            Debug.Log($"Test file size: {fileSize} bytes (expected: 70 bytes)"); // 44 header + 2*13 keyframes
             Debug.Log($"Position bounds used: min=({testMin.x}, {testMin.y}, {testMin.z}) max=({testMax.x}, {testMax.y}, {testMax.z})");
             Debug.Log("Test data uses dynamic scaling for position and proper degree modulation for rotation");
         }
@@ -459,16 +471,17 @@ public class RecordCamera : MonoBehaviour
     }
     
     /// <summary>
-    /// C Engine Integration Documentation - Camera File Format V1
+    /// C Engine Integration Documentation - Camera File Format V2
     /// 
     /// CAMERA FILE FORMAT (.cam):
     /// The camera file stores compressed camera animation data with dynamic position scaling
     /// and proper rotation modulation handling.
     /// 
     /// FILE STRUCTURE:
-    /// 1. Header (40 bytes):
+    /// 1. Header (44 bytes V2, 40 bytes V1):
     ///    - magic: 'CAM0' (0x43414D30)
-    ///    - version: 1
+    ///    - version: 2
+    ///    - flags: 4 bytes (bitmask) in v2. Bit0=flipZ, Bit1=flipRotationWithZ
     ///    - keyframe_count: Number of camera keyframes
     ///    - fps: Recording frame rate (uint32_t integer)
     ///    - position_min_x, position_min_y, position_min_z: Minimum position bounds (floats)
@@ -497,6 +510,7 @@ public class RecordCamera : MonoBehaviour
     ///     uint32_t version;
     ///     uint32_t keyframe_count;
     ///     uint32_t fps;
+    ///     uint32_t flags; // v2+: bit0=flipZ, bit1=flipRotWithZ
     ///     float position_min_x, position_min_y, position_min_z;
     ///     float position_max_x, position_max_y, position_max_z;
     /// } CameraHeader;
@@ -509,7 +523,13 @@ public class RecordCamera : MonoBehaviour
     /// 
     /// // Load camera file
     /// CameraHeader header;
-    /// fread(&header, sizeof(CameraHeader), 1, file);
+    /// // best practice: read prefix first, then optional fields based on version
+    /// fread(&header.magic, sizeof(uint32_t), 1, file);
+    /// fread(&header.version, sizeof(uint32_t), 1, file);
+    /// fread(&header.keyframe_count, sizeof(uint32_t), 1, file);
+    /// fread(&header.fps, sizeof(uint32_t), 1, file);
+    /// if (header.version >= 2) fread(&header.flags, sizeof(uint32_t), 1, file);
+    /// fread(&header.position_min_x, sizeof(float)*6, 1, file);
     /// 
     /// CameraKeyframe* keyframes = malloc(sizeof(CameraKeyframe) * header.keyframe_count);
     /// fread(keyframes, sizeof(CameraKeyframe), header.keyframe_count, file);

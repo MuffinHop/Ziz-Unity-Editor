@@ -207,7 +207,7 @@ public abstract class Shape : MonoBehaviour
             {
                 position = transform.position,
                 rotation = transform.eulerAngles,
-                scale = transform.localScale
+                scale = transform.lossyScale
             };
 
             animationFrames.Add(frameMesh);

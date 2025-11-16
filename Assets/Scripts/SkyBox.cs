@@ -440,7 +440,7 @@ namespace ZizSceneEditor.Assets.Scripts.Shapes
                 new Rat.ActorTransformFloat {
                     position = transform.position,
                     rotation = transform.eulerAngles,
-                    scale = transform.localScale,
+                    scale = transform.lossyScale,
                     rat_file_index = 0,
                     rat_local_frame = 0
                 }
@@ -546,7 +546,7 @@ namespace ZizSceneEditor.Assets.Scripts.Shapes
                 {
                     position = transform.position,
                     rotation = transform.eulerAngles,
-                    scale = transform.localScale,
+                    scale = transform.lossyScale,
                     rat_file_index = 0,
                     rat_local_frame = 0
                 });

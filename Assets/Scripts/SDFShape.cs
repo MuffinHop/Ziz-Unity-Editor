@@ -144,7 +144,7 @@ public class SDFShape : MonoBehaviour
             frameTransforms[frame][this] = new TransformData {
                 position = transform.position,
                 rotation = transform.rotation,
-                scale = transform.localScale,
+                scale = transform.lossyScale,
                 time = Time.time // record timestamp for resampling
             };
         }
