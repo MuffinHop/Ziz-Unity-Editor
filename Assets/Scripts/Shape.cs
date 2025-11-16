@@ -3,9 +3,7 @@ using System.Linq; // Add this
 using UnityEngine;
 
 /// <summary>
-/// Base class for all procedural shapes translated from gl_shapes.* style API.
-/// Provides a common mesh-generation pipeline & editor-time gizmo drawing.
-/// Now generates .act files for C engine compatibility.
+/// Base class for procedural shapes. Handles mesh generation and optional export.
 /// </summary>
 public abstract class Shape : MonoBehaviour
 {
@@ -154,7 +152,7 @@ public abstract class Shape : MonoBehaviour
     {
         if (isRecordingAnimation)
         {
-            Debug.LogWarning($"Shape '{name}': Animation recording already in progress");
+        Debug.LogWarning($"Shape {name} - animation recording already in progress");
             return;
         }
 
@@ -164,7 +162,7 @@ public abstract class Shape : MonoBehaviour
         frameTransforms.Clear();
         frameTimestamps.Clear();
 
-        Debug.Log($"Shape '{name}': Started animation recording at {animationFramerate} FPS");
+    Debug.Log($"Shape {name} - started recording at {animationFramerate} FPS");
     }
 
     /// <summary>
@@ -174,7 +172,7 @@ public abstract class Shape : MonoBehaviour
     {
         if (!isRecordingAnimation)
         {
-            Debug.LogWarning($"Shape '{name}': No animation recording in progress");
+            Debug.LogWarning($"Shape {name} - no animation recording in progress");
             return;
         }
 
@@ -182,11 +180,11 @@ public abstract class Shape : MonoBehaviour
 
         if (animationFrames.Count == 0)
         {
-            Debug.LogWarning($"Shape '{name}': No animation frames recorded");
+            Debug.LogWarning($"Shape {name} - no animation frames recorded");
             return;
         }
 
-        Debug.Log($"Shape '{name}': Stopped animation recording - {animationFrames.Count} frames captured");
+    Debug.Log($"Shape {name} - stopped recording ({animationFrames.Count} frames)");
 
         // Export the recorded animation
         ExportRecordedAnimation();
@@ -216,7 +214,7 @@ public abstract class Shape : MonoBehaviour
             frameTransforms.Add(frameTransform);
             frameTimestamps.Add(currentTime);
 
-            Debug.Log($"Shape '{name}': Recorded animation frame {animationFrames.Count} at time {currentTime:F3}s");
+            Debug.Log($"Shape {name} - recorded frame {animationFrames.Count} at {currentTime:F3}s");
         }
     }
 

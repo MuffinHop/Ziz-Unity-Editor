@@ -456,7 +456,7 @@ public class RatRecorder : MonoBehaviour
                 var actor = GetComponent<Actor>();
                 if (actor != null && files.Count > 0)
                 {
-                    UnityEngine.Debug.Log($"RatRecorder: Updating Actor '{name}' RAT references ({files.Count} files)");
+                    UnityEngine.Debug.Log($"RatRecorder - updating actor {name} RAT references ({files.Count} files)");
                     actor.SetRatFileReferences(files, new List<uint>());
                 }
             }
@@ -736,7 +736,7 @@ public class RatRecorder : MonoBehaviour
             return;
         }
 
-        Debug.Log("=== RatRecorder Mesh Diagnosis ===");
+    Debug.Log("RatRecorder mesh diagnosis:");
         Debug.Log($"Source Mesh: {_sourceMesh.name}");
         Debug.Log($"Vertex Count: {_sourceMesh.vertexCount}");
         Debug.Log($"Triangle Indices Count: {_sourceMesh.triangles?.Length ?? 0}");
@@ -761,19 +761,19 @@ public class RatRecorder : MonoBehaviour
         
         if (targetSkinnedMeshRenderer != null)
         {
-            Debug.Log("=== Skinned Mesh Renderer Info ===");
+            Debug.Log("Skinned mesh renderer info:");
             Debug.Log($"Shared Mesh: {targetSkinnedMeshRenderer.sharedMesh?.name ?? "null"}");
             Debug.Log($"Bone Count: {targetSkinnedMeshRenderer.bones?.Length ?? 0}");
             
             if (_tempMesh != null)
             {
-                Debug.Log("=== Temporary Mesh Info ===");
+                Debug.Log("Temporary mesh info:");
                 Debug.Log($"Temp Mesh Vertex Count: {_tempMesh.vertexCount}");
                 Debug.Log($"Temp Mesh Triangle Indices Count: {_tempMesh.triangles?.Length ?? 0}");
                 Debug.Log($"Temp Mesh Triangle data valid: {(_tempMesh.triangles?.Length ?? 0) % 3 == 0}");
             }
         }
         
-        Debug.Log("=== End Diagnosis ===");
+    Debug.Log("End diagnosis");
     }
 }

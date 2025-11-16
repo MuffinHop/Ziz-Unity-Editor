@@ -14,6 +14,7 @@ using UnityEditor;
 /// Binary file header for Actor data files (.act) 
 /// Version 6: Mesh data only - all transforms baked into vertex animation in RAT files
 /// No transform keyframes stored - animation is purely vertex-based
+/// Texture filename stored in this header is the base filename only; the texture file is expected to be in the same folder as the .act file.
 /// </summary>
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 public struct ActorHeader
@@ -79,7 +80,7 @@ public enum ActorRenderingMode
 
 public class Actor : MonoBehaviour
 {
-    // NOTE: When exporting, all vertex animation and per-frame transforms are baked into RAT files.
+    // Export: vertex animation and per-frame transforms are stored in RAT files (ACT contains mesh + RAT refs).
     // The .act file contains static mesh data + references to the RAT files (no transforms).
     // If an Actor has an Animator plus external transform modifications, recordUntilManualStop can be used
     // to ensure the full transform motion over the entire play session is captured (default: false).
@@ -169,7 +170,7 @@ public class Actor : MonoBehaviour
         // Generate texture filename and process texture
         GenerateAndProcessTexture(cleanName);
         
-        Debug.Log($"Actor '{name}': Auto-generated filenames - Base: '{baseFilename}', RAT: '{ratFilePath}', Texture: '{textureFilename}'");
+    Debug.Log($"Actor {name} - generated filenames: Base={baseFilename}, RAT={ratFilePath}, Texture={textureFilename}");
     }
     
     /// <summary>
@@ -177,7 +178,7 @@ public class Actor : MonoBehaviour
     /// </summary>
     private void GenerateAndProcessTexture(string cleanName)
     {
-        // NOTE: MatCap rendering mode *does* sample from _MainTex when provided. Allow texture processing for MatCap.
+    // MatCap mode samples _MainTex when provided. Allow texture processing for MatCap.
         
         try
         {
@@ -234,11 +235,11 @@ public class Actor : MonoBehaviour
                     {
                         System.IO.File.WriteAllBytes(fullPath, pngData);
                         textureFilename = $"{cleanName}.png";
-                        Debug.Log($"Actor '{name}': Exported readable texture '{sourceTexture.name}' to '{outputPath}' ({pngData.Length} bytes)");
+                        Debug.Log($"Actor {name} - exported readable texture: {sourceTexture.name} to {outputPath} ({pngData.Length} bytes)");
                     }
                     else
                     {
-                        Debug.LogWarning($"Actor '{name}': Failed to encode texture to PNG.");
+                        Debug.LogWarning($"Actor {name} - failed to encode texture to PNG.");
                         GenerateFallbackTexture(cleanName);
                     }
                 }
@@ -263,11 +264,11 @@ public class Actor : MonoBehaviour
                     {
                         System.IO.File.WriteAllBytes(fullPath, pngData);
                         textureFilename = $"{cleanName}.png";
-                        Debug.Log($"Actor '{name}': Exported non-readable texture '{sourceTexture.name}' to '{outputPath}' ({pngData.Length} bytes)");
+                        Debug.Log($"Actor {name} - exported non-readable texture: {sourceTexture.name} to {outputPath} ({pngData.Length} bytes)");
                     }
                     else
                     {
-                        Debug.LogWarning($"Actor '{name}': Failed to encode texture to PNG.");
+                        Debug.LogWarning($"Actor {name} - failed to encode texture to PNG.");
                         GenerateFallbackTexture(cleanName);
                     }
                     
@@ -276,13 +277,13 @@ public class Actor : MonoBehaviour
             }
             else
             {
-                Debug.LogWarning($"Actor '{name}': No texture found on GameObject, material, or children. Using fallback texture naming.");
+                Debug.LogWarning($"Actor {name} - no texture found on object or children; using fallback filename.");
                 GenerateFallbackTexture(cleanName);
             }
         }
         catch (System.Exception e)
         {
-            Debug.LogWarning($"Actor '{name}': Failed to export texture: {e.Message}\n{e.StackTrace}");
+            Debug.LogWarning($"Actor {name} - texture export failed: {e.Message}\n{e.StackTrace}");
             GenerateFallbackTexture(cleanName);
         }
     }
@@ -294,7 +295,7 @@ public class Actor : MonoBehaviour
     {
         // Use naming convention: actor name + .png
         textureFilename = $"{cleanName}.png";
-        Debug.Log($"Actor '{name}': Using fallback texture filename: '{textureFilename}'");
+    Debug.Log($"Actor {name} - using fallback texture filename: {textureFilename}");
     }
 
     /// <summary>
@@ -312,7 +313,7 @@ public class Actor : MonoBehaviour
         // REQUIRE at least one renderer - this is non-negotiable
         if (meshRenderer == null && skinnedMeshRenderer == null)
         {
-            Debug.LogError($"Actor '{name}' REQUIRES either a MeshRenderer or SkinnedMeshRenderer component!");
+            Debug.LogError($"Actor {name} requires a MeshRenderer or SkinnedMeshRenderer component.");
             
 #if UNITY_EDITOR
             // In editor, throw an exception to prevent the component from being added
@@ -336,7 +337,7 @@ public class Actor : MonoBehaviour
         // Warn if no animator is found (optional but recommended)
         if (animator == null)
         {
-            Debug.LogWarning($"Actor '{name}' has no Animator component in this GameObject or its parents. Consider adding one for animation control.");
+            Debug.LogWarning($"Actor {name} has no Animator; add one for animation control if needed.");
         }
         
         // Set up the shader and material for this rendering mode
@@ -353,7 +354,7 @@ public class Actor : MonoBehaviour
         
         if (renderer == null)
         {
-            Debug.LogError($"Actor '{name}': No renderer found for shader setup!");
+            Debug.LogError($"Actor {name} - no renderer found for shader setup.");
             return;
         }
         
@@ -362,7 +363,7 @@ public class Actor : MonoBehaviour
         
         if (string.IsNullOrEmpty(shaderName))
         {
-            Debug.LogError($"Actor '{name}': Unknown rendering mode: {renderingMode}");
+            Debug.LogError($"Actor {name} - unknown rendering mode: {renderingMode}");
             return;
         }
         
@@ -371,7 +372,7 @@ public class Actor : MonoBehaviour
         
         if (shader == null)
         {
-            Debug.LogWarning($"Actor '{name}': Shader '{shaderName}' not found yet (may not be imported). Skipping material setup.");
+            Debug.LogWarning($"Actor {name} - shader '{shaderName}' not found yet; skipping material setup.");
             return;
         }
         
@@ -386,7 +387,7 @@ public class Actor : MonoBehaviour
             if (texture != null)
             {
                 material.SetTexture("_MainTex", texture);
-                Debug.Log($"Actor '{name}': Applied texture '{texture.name}' to {renderingMode} shader");
+                Debug.Log($"Actor {name} - applied texture {texture.name} to {renderingMode} shader");
                 // If we have a material-assigned main texture but no explicit textureFilename configured, set it (Editor only)
 #if UNITY_EDITOR
                 if (string.IsNullOrEmpty(textureFilename))
@@ -414,14 +415,14 @@ public class Actor : MonoBehaviour
                 // Modern MatCap shaders sample from _MainTex - ensure both properties are set so both shader variants work
                 material.SetTexture("_MainTex", matcap);
                 material.SetTexture("_Matcap", matcap);
-                Debug.Log($"Actor '{name}': Applied matcap texture '{matcap.name}' to _MainTex and _Matcap");
+                Debug.Log($"Actor {name} - applied matcap: {matcap.name}");
             }
         }
         
         // Apply the material to all materials on the renderer
         renderer.material = material;
         
-        Debug.Log($"Actor '{name}': Applied shader '{shaderName}' for rendering mode '{renderingMode}'");
+    Debug.Log($"Actor {name} - shader '{shaderName}' set for rendering mode {renderingMode}");
     }
 
     /// <summary>
@@ -578,7 +579,7 @@ public class Actor : MonoBehaviour
             }
         }
         
-        Debug.LogWarning($"Actor '{name}': Could not find matcap texture. Using white texture as fallback.");
+    Debug.LogWarning($"Actor {name} - no matcap texture found; using white fallback.");
         return null;
     }
     
@@ -857,7 +858,7 @@ public class Actor : MonoBehaviour
         ratRecorder = GetComponent<RatRecorder>();
         if (ratRecorder == null)
         {
-            Debug.LogWarning($"Actor '{name}': No RatRecorder found. Adding one automatically...");
+            Debug.LogWarning($"Actor {name} - no RatRecorder found; adding one now.");
             ratRecorder = gameObject.AddComponent<RatRecorder>();
             
             // Configure RatRecorder with animation settings
@@ -887,7 +888,7 @@ public class Actor : MonoBehaviour
         
         // Try to get model center from RatRecorder (no longer stored, but used for validation)
         Vector3 ratModelCenter = ratRecorder.GetModelCenter();
-        Debug.Log($"Actor '{name}': RAT model center (for reference): {ratModelCenter}");
+    Debug.Log($"Actor {name} - RAT model center: {ratModelCenter}");
         
         // Initialize animation data
         AnimationData = new ActorAnimationData();
@@ -898,9 +899,9 @@ public class Actor : MonoBehaviour
         recordingStartTime = Time.time;
         recordedFrameCount = 0;
         
-        Debug.Log($"Actor '{name}': Started recording transforms at {AnimationData.framerate} FPS for {animationDuration} seconds");
-        Debug.Log($"Actor '{name}': Will save to {baseFilename}.rat and {baseFilename}.act");
-        Debug.Log($"Actor '{name}': Position represents model center for RAT vertex deltas");
+    Debug.Log($"Actor {name} - recording transforms at {AnimationData.framerate} FPS for {animationDuration}s");
+    Debug.Log($"Actor {name} - will save: {baseFilename}.rat, {baseFilename}.act");
+    Debug.Log($"Actor {name} - positions use model center for RAT deltas");
     }
     
     /// <summary>
@@ -915,7 +916,7 @@ public class Actor : MonoBehaviour
         // Save both files together
         SaveBothFiles();
         
-        Debug.Log($"Actor '{name}': Recorded {recordedFrameCount} transform keyframes");
+    Debug.Log($"Actor {name} - recorded {recordedFrameCount} transform keyframes");
     }
     
     /// <summary>
@@ -925,7 +926,7 @@ public class Actor : MonoBehaviour
     {
         if (AnimationData == null || AnimationData.ratFilePaths.Count == 0)
         {
-            Debug.LogError($"Actor '{name}': No animation data to save!");
+            Debug.LogError($"Actor {name} - no animation data to save.");
             return;
         }
         
@@ -973,17 +974,17 @@ public class Actor : MonoBehaviour
                     AnimationData.meshColors = sourceMesh.colors.Length > 0 ? sourceMesh.colors : new Color[sourceMesh.vertexCount];
                     AnimationData.meshIndices = sourceMesh.triangles;
                     
-                    Debug.Log($"Actor '{name}': Extracted mesh data - {AnimationData.meshUVs.Length} UVs, {AnimationData.meshIndices.Length} indices");
+                    Debug.Log($"Actor {name} - extracted mesh data: {AnimationData.meshUVs.Length} UVs, {AnimationData.meshIndices.Length} indices");
                 }
                 else
                 {
-                    Debug.LogError($"Actor '{name}': No source mesh found to extract data from!");
+                    Debug.LogError($"Actor {name} - no source mesh found to extract data from.");
                     return;
                 }
             }
             
             // Log diagnostic info
-            Debug.Log($"=== ACT Export Diagnostic ===");
+            Debug.Log($"ACT export diagnostic:");
             Debug.Log($"Base filename: {baseFilename}");
             Debug.Log($"RAT file paths: {string.Join(", ", AnimationData.ratFilePaths)}");
             Debug.Log($"Framerate: {AnimationData.framerate}");
@@ -1007,7 +1008,7 @@ public class Actor : MonoBehaviour
 
                 if (string.IsNullOrEmpty(AnimationData.textureFilename))
                 {
-                    Debug.LogError($"Actor '{name}': MatCap rendering mode requires a texture. Assign one before exporting.");
+                    Debug.LogError($"Actor {name} - MatCap mode requires a texture. Assign one before exporting.");
                     return;
                 }
             }
@@ -1015,17 +1016,17 @@ public class Actor : MonoBehaviour
             // Save Actor data with mesh information only (no transforms)
             SaveActorData(actorFilePath, AnimationData, renderingMode);
             
-            Debug.Log($"Actor '{name}': Actor file saved successfully:");
-            Debug.Log($"  - Actor file: {actorFilePath}");
-            Debug.Log($"  - References RAT file(s): {string.Join(", ", AnimationData.ratFilePaths)}");
-            Debug.Log($"  - Framerate: {AnimationData.framerate} FPS");
-            Debug.Log($"  - Mesh vertices: {AnimationData.meshUVs?.Length ?? 0}");
-            Debug.Log($"  - Mesh indices: {AnimationData.meshIndices?.Length ?? 0}");
-            Debug.Log($"  - Texture: {AnimationData.textureFilename}");
+            Debug.Log($"Actor {name} - actor file saved:");
+            Debug.Log($"  - file: {actorFilePath}");
+            Debug.Log($"  - RAT references: {string.Join(", ", AnimationData.ratFilePaths)}");
+            Debug.Log($"  - framerate: {AnimationData.framerate} FPS");
+            Debug.Log($"  - mesh vertices: {AnimationData.meshUVs?.Length ?? 0}");
+            Debug.Log($"  - mesh indices: {AnimationData.meshIndices?.Length ?? 0}");
+            Debug.Log($"  - texture: {AnimationData.textureFilename}");
         }
         catch (System.Exception e)
         {
-            Debug.LogError($"Actor '{name}': Failed to save Actor file: {e.Message}");
+            Debug.LogError($"Actor {name} - failed to save actor file: {e.Message}");
         }
     }
     
@@ -1044,7 +1045,7 @@ public class Actor : MonoBehaviour
         // Convert all RAT filenames to UTF-8 bytes with null terminators
         var ratFileNameBytes = new List<byte>();
         
-        Debug.Log($"ACT Export v6: Writing {data.ratFilePaths.Count} RAT file references:");
+    Debug.Log($"ACT export: writing {data.ratFilePaths.Count} RAT file references");
         
         foreach (string ratPath in data.ratFilePaths)
         {
@@ -1056,7 +1057,7 @@ public class Actor : MonoBehaviour
             }
             
             byte[] pathBytes = System.Text.Encoding.UTF8.GetBytes(cleanPath);
-            Debug.Log($"  - RAT file: '{cleanPath}' ({pathBytes.Length} bytes)");
+            Debug.Log($"  - RAT: '{cleanPath}' ({pathBytes.Length} bytes)");
             
             ratFileNameBytes.AddRange(pathBytes);
             ratFileNameBytes.Add(0); // Null terminator
@@ -1064,8 +1065,10 @@ public class Actor : MonoBehaviour
         
         byte[] allRatFileNames = ratFileNameBytes.ToArray();
         
-        // Convert texture filename to UTF-8 bytes
-        byte[] textureFilenameBytes = System.Text.Encoding.UTF8.GetBytes(data.textureFilename ?? "");
+    // Convert texture filename to UTF-8 bytes
+    // Store only the base filename (no directory path) because textures are expected to sit alongside the .act file.
+    string textureFilenameToWrite = string.IsNullOrEmpty(data.textureFilename) ? string.Empty : Path.GetFileName(data.textureFilename);
+    byte[] textureFilenameBytes = System.Text.Encoding.UTF8.GetBytes(textureFilenameToWrite ?? "");
         
         // Calculate offsets
         uint headerSize = (uint)Marshal.SizeOf<ActorHeader>();
@@ -1109,7 +1112,7 @@ public class Actor : MonoBehaviour
             if (allRatFileNames.Length > 0)
             {
                 writer.Write(allRatFileNames);
-                Debug.Log($"ACT Export v6: Wrote {allRatFileNames.Length} bytes of RAT filenames at offset {ratFilenamesOffset}");
+                Debug.Log($"ACT export: wrote {allRatFileNames.Length} bytes of RAT filenames at offset {ratFilenamesOffset}");
             }
             
             // Write mesh UV data
@@ -1118,7 +1121,7 @@ public class Actor : MonoBehaviour
                 writer.Write(uv.x);
                 writer.Write(uv.y);
             }
-            Debug.Log($"ACT Export v6: Wrote {data.meshUVs.Length} UVs at offset {meshUvsOffset}");
+            Debug.Log($"ACT export: wrote {data.meshUVs.Length} UVs at offset {meshUvsOffset}");
             
             // Write mesh color data
             foreach (var color in data.meshColors)
@@ -1128,28 +1131,28 @@ public class Actor : MonoBehaviour
                 writer.Write(color.b);
                 writer.Write(color.a);
             }
-            Debug.Log($"ACT Export v6: Wrote {data.meshColors.Length} colors at offset {meshColorsOffset}");
+            Debug.Log($"ACT export: wrote {data.meshColors.Length} colors at offset {meshColorsOffset}");
             
             // Write mesh indices
             foreach (var index in data.meshIndices)
             {
                 writer.Write((ushort)index);
             }
-            Debug.Log($"ACT Export v6: Wrote {data.meshIndices.Length} indices at offset {meshIndicesOffset}");
+            Debug.Log($"ACT export: wrote {data.meshIndices.Length} indices at offset {meshIndicesOffset}");
             
-            // Write texture filename
+            // Write texture filename (base filename only)
             if (textureFilenameBytes.Length > 0)
             {
                 writer.Write(textureFilenameBytes);
-                Debug.Log($"ACT Export v6: Wrote texture filename '{data.textureFilename}' ({textureFilenameBytes.Length} bytes) at offset {textureFilenameOffset}");
+                Debug.Log($"ACT export: wrote texture filename '{textureFilenameToWrite}' ({textureFilenameBytes.Length} bytes) at offset {textureFilenameOffset} (textures should be in the same folder as the .act file)");
             }
         }
         
-        Debug.Log($"Saved Actor data v6 (mesh data only): {data.meshUVs.Length} vertices, {data.meshIndices.Length} indices, {data.ratFilePaths.Count} RAT files");
-        Debug.Log($"  - Framerate: {data.framerate} FPS");
-        Debug.Log($"  - Rendering mode: {renderingMode}");
-        Debug.Log($"  - Texture: {data.textureFilename}");
-            Debug.Log($"  - All transforms (object motion) and vertex animation are baked into RAT files; .act contains static mesh data + RAT references");
+    Debug.Log($"Saved Actor data v6: {data.meshUVs.Length} vertices, {data.meshIndices.Length} indices, {data.ratFilePaths.Count} RAT files");
+    Debug.Log($"  - framerate: {data.framerate} FPS");
+    Debug.Log($"  - rendering mode: {renderingMode}");
+    Debug.Log($"  - texture: {data.textureFilename}");
+            Debug.Log($"  - Transforms and vertex animation are baked into RAT files; ACT contains mesh data and RAT references");
     }
 
     /// <summary>
@@ -1172,7 +1175,7 @@ public class Actor : MonoBehaviour
         AnimationData.ratFilePaths.Clear();
         AnimationData.ratFilePaths.AddRange(createdRatFiles);
         
-        Debug.Log($"Actor '{name}': Updated RAT file references - {createdRatFiles.Count} files");
+    Debug.Log($"Actor {name} - updated RAT references: {createdRatFiles.Count} files");
     }
     
     /// <summary>
@@ -1183,7 +1186,7 @@ public class Actor : MonoBehaviour
         baseFilename = filename;
         ratFilePath = $"GeneratedData/{filename}.rat";
         
-        Debug.Log($"Actor '{name}': Updated filenames - Base: '{baseFilename}', RAT: '{ratFilePath}'");
+    Debug.Log($"Actor {name} - updated filenames: Base={baseFilename}, RAT={ratFilePath}");
     }
     
     /// <summary>
@@ -1193,13 +1196,13 @@ public class Actor : MonoBehaviour
     {
         if (isRecording)
         {
-            Debug.LogWarning($"Actor '{name}': Already recording!");
+            Debug.LogWarning($"Actor {name} - already recording");
             return;
         }
         
         if (animator == null)
         {
-            Debug.LogError($"Actor '{name}': Cannot start recording without an Animator!");
+            Debug.LogError($"Actor {name} - cannot start recording without an Animator");
             return;
         }
         
@@ -1215,7 +1218,7 @@ public class Actor : MonoBehaviour
             ratRecorder.BeginRecording();
         }
         
-        Debug.Log($"Actor '{name}': Starting combined RAT and Actor recording...");
+    Debug.Log($"Actor {name} - starting combined RAT+ACT recording...");
     }
     
     /// <summary>
@@ -1225,7 +1228,7 @@ public class Actor : MonoBehaviour
     {
         if (!isRecording)
         {
-            Debug.LogWarning($"Actor '{name}': Not currently recording!");
+            Debug.LogWarning($"Actor {name} - not currently recording");
             return;
         }
         
@@ -1245,7 +1248,7 @@ public class Actor : MonoBehaviour
     {
         // Note: v6 ACT files have all transforms baked into RAT vertex data
         // This method is kept for compatibility but doesn't apply stored transforms
-        Debug.LogWarning($"Actor '{name}': ApplyKeyframe called but v6 ACT has no stored transforms - use AnimationPlayer instead");
+    Debug.LogWarning($"Actor {name} - ApplyKeyframe called; v6 ACT has no transforms stored (use AnimationPlayer)");
     }
     
     /// <summary>
@@ -1258,7 +1261,7 @@ public class Actor : MonoBehaviour
     {
         if (AnimationData == null || AnimationData.ratFilePaths.Count == 0)
         {
-            Debug.LogError($"Actor '{name}': No RAT file references");
+            Debug.LogError($"Actor {name} - no RAT file references");
             return false;
         }
         
@@ -1270,15 +1273,15 @@ public class Actor : MonoBehaviour
             string fullPath = Path.Combine(directory, ratPath);
             if (!File.Exists(fullPath))
             {
-                Debug.LogError($"Actor '{name}': Referenced RAT file not found: {ratPath}");
+                Debug.LogError($"Actor {name} - referenced RAT not found: {ratPath}");
                 return false;
             }
         }
         
-        Debug.Log($"Actor '{name}': Validation successful!");
-        Debug.Log($"  - {AnimationData.ratFilePaths.Count} RAT file(s) found");
-        Debug.Log($"  - Framerate: {AnimationData.framerate} FPS");
-        Debug.Log($"  - All transforms and vertex animation are in RAT files");
+    Debug.Log($"Actor {name} - validation successful");
+    Debug.Log($"  - {AnimationData.ratFilePaths.Count} RAT files found");
+    Debug.Log($"  - framerate: {AnimationData.framerate} FPS");
+    Debug.Log($"  - transforms and vertex animation are stored in RAT files");
         
         return true;
     }

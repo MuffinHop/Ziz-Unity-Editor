@@ -42,7 +42,7 @@ public static class FileLogger
             };
 
             _isInitialized = true;
-            Log($"=== File Logger Initialized ===");
+            Log($"File logger initialized");
             Log($"Log file: {_logFilePath}");
             Log($"Started: {DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}");
             Log($"Unity Version: {Application.unityVersion}");
@@ -109,7 +109,7 @@ public static class FileLogger
     public static void LogSection(string sectionName)
     {
         Log("");
-        Log($"=== {sectionName} ===");
+    Log($"{sectionName}:");
     }
 
     /// <summary>
@@ -164,7 +164,7 @@ public static class FileLogger
                 {
                     Log("");
                     Log($"Ended: {DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}");
-                    Log("=== Log Session Complete ===");
+                    Log("Log session complete");
                     
                     Flush();
                     _logWriter.Close();

@@ -236,7 +236,7 @@ namespace Rat
                     isFirstFrameRaw = header.is_first_frame_raw == 1
                 };
 
-                // Note: mesh_data_filename support removed - mesh data now handled by .act files
+                // Note: mesh_data_filename support removed — mesh data is now handled by .act files
 
                 reader.BaseStream.Seek(header.bit_widths_offset, SeekOrigin.Begin);
                 reader.Read(anim.bit_widths_x, 0, anim.bit_widths_x.Length);
@@ -426,7 +426,7 @@ namespace Rat
             int maxFileSize = maxFileSizeKB * KB;
             var createdFiles = new List<string>();
 
-            // NOTE: Mesh data (UVs, colors, indices) is now embedded in .act files (version 5)
+            // Note: Mesh data (UVs, colors, indices) is embedded in .act files (version 5)
             // We no longer create separate .ratmesh files
             // The .rat file still references the mesh data filename for backward compatibility with C engine
 
@@ -597,8 +597,8 @@ namespace Rat
         /// <summary>
         /// Compress animation data from frames with static UV and color data.
         /// 
-        /// IMPORTANT: This method expects vertex frames that already have transforms applied!
-        /// The bounding box is calculated from the INPUT frames and stored in the RAT header.
+    /// Note: this expects frames with transforms already applied (world-space vertices).
+    /// Bounds are computed from the input frames and stored in the RAT header.
         /// During playback, vertices are quantized to 8-bit (0-255) and scaled into this bounding box.
         /// 
         /// Pipeline:
@@ -973,20 +973,11 @@ namespace Rat
         /// <summary>
         /// Unified export pipeline: compress vertex animation with transforms baked into vertices, and save as RAT + ACT files.
         /// 
-        /// CRITICAL FLOW:
-        /// 1. Receives vertex frames (local space) + transform keyframes per frame
-        /// 2. Applies transform matrix to EVERY vertex in EVERY frame
-        ///    - Position: object-to-world translation
-        ///    - Rotation: object-to-world rotation
-        ///    - Scale: object-to-world scale
-        /// 3. Resulting vertices are in WORLD SPACE with all animation baked in
-        /// 4. Calls CompressFromFrames with transformed vertex data
-        /// 5. CompressFromFrames calculates bounds from transformed data
-        /// 6. Vertices quantized to 8-bit using these bounds
-        /// 7. RAT file stores: bounds (float) + quantized vertices + delta stream
-        /// 8. ACT file stores: mesh data + RAT file references (identity transforms only)
-        /// 
-        /// Result: RAT file is completely self-contained with all spatial data
+    /// Flow: apply transforms to frames, compress vertex deltas, write RAT/ACT files.
+    /// - Transforms are applied to vertices to produce world-space frames
+    /// - Compression uses computed bounds and 8-bit quantization per axis
+    /// - RAT files contain bounds, quantized vertices, and delta streams
+    /// - ACT files contain mesh data and RAT references (no per-frame transforms)
         /// </summary>
         public static void ExportAnimation(
             string baseFilename,

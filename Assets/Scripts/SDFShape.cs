@@ -49,11 +49,10 @@ public class SDFShape : MonoBehaviour
     public float starOuter = 0.5f;
     public float starPoints = 5f;
 
-    // New: choose export framerate (30 or 25)
-    // Set this to 30 (default) or 25 before exporting.
+    // Export framerate (default 30). Change to 25 before exporting if needed.
     public static int exportFrameRate = 30;
 
-    // New: platform and resolution settings
+    // platform and resolution settings
     public static string targetPlatform = "Wii";
     public static SDFEmulatedResolution targetResolution = SDFEmulatedResolution.Tex512x512;
 
@@ -195,8 +194,7 @@ public class SDFShape : MonoBehaviour
     /// The resulting filename format is:
     /// Shape_{shape}_{width}x{height}_{paramString}{extra}_{hash}.png
     ///
-    /// Important: no timestamps are used — filenames are fully deterministic based on parameters.
-    /// This enables reusing previously-generated PNGs when recyclePreviousShapes is enabled.
+    /// Note: filenames are deterministic (no timestamps). This allows reusing existing PNGs when recyclePreviousShapes is enabled.
     /// </summary>
     public string BuildOutputFilename(int width, int height, bool asRat = false)
     {

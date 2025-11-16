@@ -11,8 +11,7 @@ using UnityEditor;
 #endif
 
 /// <summary>
-/// Unity-Enhanced BSP/PVS Level Export System
-/// Complete implementation with Unity API integration for hardware-accelerated PVS computation
+/// BSP/PVS level exporter. Uses Unity APIs where useful to compute PVS and export level data.
 /// </summary>
 public class Level : MonoBehaviour
 {
@@ -231,7 +230,7 @@ public class Level : MonoBehaviour
             commandBuffer.name = "PVS_Computation";
         }
         
-        Debug.Log("Unity API components initialized for hardware-accelerated PVS computation");
+    Debug.Log("PVS: Unity components initialized");
     }
     
     /// <summary>
@@ -240,7 +239,7 @@ public class Level : MonoBehaviour
     public void ExportLevel()
     {
         performanceTimer.Restart();
-        Debug.Log("Starting Unity-enhanced level export...");
+    Debug.Log("Starting level export...");
         
         PrepareData();
         
@@ -274,7 +273,7 @@ public class Level : MonoBehaviour
         // Compute PVS with Unity API
         if (enablePVSComputation)
         {
-            Debug.Log("Computing PVS with Unity API acceleration...");
+            Debug.Log("Computing PVS (Unity-assisted)...");
             // Avoid starting coroutines if the GameObject is inactive (e.g. called from OnDisable via reflection)
             if (useAsyncPVSComputation && gameObject.activeInHierarchy)
             {
@@ -909,22 +908,22 @@ public class Level : MonoBehaviour
     /// </summary>
     private void MonitorPVSPerformance()
     {
-        Debug.Log("=== PVS PERFORMANCE ANALYSIS ===");
-        Debug.Log($"⏱️  Total Computation Time: {lastComputationTime}ms");
-        Debug.Log($"📊 Leaves Processed: {processedLeafCount}/{totalLeafCount}");
-        Debug.Log($"⚡ Average Time/Leaf: {(float)lastComputationTime/processedLeafCount:F2}ms");
-        Debug.Log($"🔥 Throughput: {processedLeafCount * 1000f / lastComputationTime:F1} leaves/second");
+    Debug.Log("PVS performance analysis:");
+    Debug.Log($"<color=teal>Total Computation Time:</color> {lastComputationTime}ms");
+    Debug.Log($"<color=teal>Leaves Processed:</color> {processedLeafCount}/{totalLeafCount}");
+    Debug.Log($"<color=teal>Average Time/Leaf:</color> {(float)lastComputationTime/processedLeafCount:F2}ms");
+    Debug.Log($"<color=teal>Throughput:</color> {processedLeafCount * 1000f / lastComputationTime:F1} leaves/second");
         
         long memoryUsage = System.GC.GetTotalMemory(false);
-        Debug.Log($"💾 Memory Usage: {memoryUsage / (1024 * 1024)}MB");
+    Debug.Log($"<color=teal>Memory Usage:</color> {memoryUsage / (1024 * 1024)}MB");
         
         int totalPVSSize = 0;
         foreach (var kvp in leafPVSData)
         {
             totalPVSSize += kvp.Value.Length;
         }
-        Debug.Log($"📦 Total PVS Data Size: {totalPVSSize / 1024}KB");
-        Debug.Log($"📈 Average PVS Size/Leaf: {totalPVSSize / leafPVSData.Count} bytes");
+    Debug.Log($"<color=teal>Total PVS Data Size:</color> {totalPVSSize / 1024}KB");
+    Debug.Log($"<color=teal>Average PVS Size/Leaf:</color> {totalPVSSize / leafPVSData.Count} bytes");
         Debug.Log("================================");
     }
     
@@ -949,13 +948,13 @@ public class Level : MonoBehaviour
         using (FileStream fs = new FileStream(fullPath, FileMode.Create))
         using (BinaryWriter writer = new BinaryWriter(fs))
         {
-            // EMU header - CRITICAL: Exact format that emudraw.c expects
+            // EMU header - exact format that emudraw.c expects
             // Order: magic, version, endian (3 uint32s)
             writer.Write(0x454D5520);  // EMU_MAGIC: "EMU " (0x454D5520 = little-endian bytes)
             writer.Write(4U);          // EMU_VERSION: 4 (supports texture filename)
             writer.Write(0x01020304U); // EMU_ENDIAN_LE marker (little-endian)
             
-            // CRITICAL: Counts come IMMEDIATELY after header (no padding)
+            // Counts come directly after header (no padding)
             // emudraw.c expects: fread(&vcount, 4, 1, fp); fread(&fcount, 4, 1, fp); etc.
             writer.Write((uint)worldVertices.Count);  // vcount (vertex count)
             writer.Write((uint)faces.Count);          // fcount (face count) 
@@ -992,9 +991,9 @@ public class Level : MonoBehaviour
             byte filterMode = useNearestFiltering ? (byte)0 : (byte)1;
             writer.Write(filterMode);
             
-            Debug.Log($"✅ EMU Header: magic=0x454D5520, version=4, endian=0x01020304");
-            Debug.Log($"✅ EMU Counts: vcount={worldVertices.Count}, fcount={faces.Count}, lcount={leafNodes.Count}");
-            Debug.Log($"✅ EMU Texture: '{textureFilename}' ({textureFilenameBytes.Length} bytes), filter={filterMode}");
+            Debug.Log($"<color=green>OK</color> EMU Header: magic=0x454D5520, version=4, endian=0x01020304");
+            Debug.Log($"<color=green>OK</color> EMU Counts: vcount={worldVertices.Count}, fcount={faces.Count}, lcount={leafNodes.Count}");
+            Debug.Log($"<color=green>OK</color> EMU Texture: '{textureFilename}' ({textureFilenameBytes.Length} bytes), filter={filterMode}");
             
             // Vertex data (vcount × 3 floats) - NO COUNT PREFIX!
             foreach (Vector3 vertex in worldVertices) 
@@ -1004,7 +1003,7 @@ public class Level : MonoBehaviour
                 writer.Write(vertex.y);
                 writer.Write(-vertex.z);
             }
-            Debug.Log($"✅ Vertices: {worldVertices.Count} × 3 floats (Z-flipped)");
+            Debug.Log($"<color=green>OK</color> Vertices: {worldVertices.Count} × 3 floats (Z-flipped)");
             
             // Normal data (vcount × 3 floats) - NO COUNT PREFIX!
             while (worldNormals.Count < worldVertices.Count)
@@ -1018,7 +1017,7 @@ public class Level : MonoBehaviour
                 writer.Write(normal.y);
                 writer.Write(-normal.z);
             }
-            Debug.Log($"✅ Normals: {worldNormals.Count} × 3 floats (Z-flipped)");
+            Debug.Log($"<color=green>OK</color> Normals: {worldNormals.Count} × 3 floats (Z-flipped)");
             
             // UV data (vcount × 2 bytes) - NO COUNT PREFIX!
             // emudraw.c expects uint8_t u, v format
@@ -1032,7 +1031,7 @@ public class Level : MonoBehaviour
                 writer.Write((byte)(Mathf.Clamp01(uv.x) * 255)); // U as byte
                 writer.Write((byte)(Mathf.Clamp01(1.0f - uv.y) * 255)); // V as byte (flipped)
             }
-            Debug.Log($"✅ UVs: {textureCoords.Count} × 2 bytes (V-flipped)");
+            Debug.Log($"<color=green>OK</color> UVs: {textureCoords.Count} × 2 bytes (V-flipped)");
             
             // Color data (vcount × 3 bytes) - NO COUNT PREFIX!
             // emudraw.c expects RGB bytes (no alpha)
@@ -1047,7 +1046,7 @@ public class Level : MonoBehaviour
                 writer.Write((byte)(Mathf.Clamp01(color.g) * 255)); // Green
                 writer.Write((byte)(Mathf.Clamp01(color.b) * 255)); // Blue
             }
-            Debug.Log($"✅ Colors: {vertexColors.Count} × 3 bytes (RGB)");
+            Debug.Log($"<color=green>OK</color> Colors: {vertexColors.Count} × 3 bytes (RGB)");
             
             // Face data (fcount × 3 uint32) - NO COUNT PREFIX!
             foreach (Face face in faces)
@@ -1072,7 +1071,7 @@ public class Level : MonoBehaviour
                 writer.Write((uint)face.vertexIndices[2]);
                 writer.Write((uint)face.vertexIndices[1]);
             }
-            Debug.Log($"✅ Faces: {faces.Count} × 3 uint32 indices (winding flipped)");
+            Debug.Log($"<color=green>OK</color> Faces: {faces.Count} × 3 uint32 indices (winding flipped)");
             
             // Leaf data (lcount leaves) - NO COUNT PREFIX!
             for (int i = 0; i < leafNodes.Count; i++)
@@ -1098,7 +1097,7 @@ public class Level : MonoBehaviour
                 writer.Write(leaf.bounds.max.y);
                 writer.Write(leaf.bounds.max.z);
             }
-            Debug.Log($"✅ Leaves: {leafNodes.Count} leaves with face indices and bboxes");
+            Debug.Log($"<color=green>OK</color> Leaves: {leafNodes.Count} leaves with face indices and bboxes");
             
             // PVS data
             int pvsBytes = (leafNodes.Count + 7) / 8;
@@ -1129,15 +1128,15 @@ public class Level : MonoBehaviour
                 
                 writer.Write(pvsData);
             }
-            Debug.Log($"✅ PVS: {pvsBytes} bytes × {leafNodes.Count} leaves");
+            Debug.Log($"<color=green>OK</color> PVS: {pvsBytes} bytes × {leafNodes.Count} leaves");
         }
         
         long fileSize = new FileInfo(fullPath).Length;
         Debug.Log("==========================================");
-        Debug.Log($"🎉 EMU FILE EXPORT COMPLETED!");
-        Debug.Log($"📁 File: {fullPath}");
-        Debug.Log($"📊 Size: {fileSize} bytes");
-        Debug.Log($"📐 Data: {worldVertices.Count} vertices, {faces.Count} faces, {leafNodes.Count} leaves");
+    Debug.Log($"EMU file export completed");
+    Debug.Log($"File: {fullPath}");
+    Debug.Log($"Size: {fileSize} bytes");
+    Debug.Log($"Data: {worldVertices.Count} vertices, {faces.Count} faces, {leafNodes.Count} leaves");
         Debug.Log("==========================================");
         
         ValidateEMUFile(fullPath);
@@ -1192,7 +1191,7 @@ public class Level : MonoBehaviour
             using (FileStream fs = new FileStream(filePath, FileMode.Open, FileAccess.Read))
             using (BinaryReader reader = new BinaryReader(fs))
             {
-                Debug.Log("🔍 EMU FILE VALIDATION - CORRECTED FORMAT");
+                Debug.Log("<color=teal>EMU FILE VALIDATION</color> - CORRECTED FORMAT");
                 
                 // Read and verify header
                 uint magic = reader.ReadUInt32();
@@ -1207,7 +1206,7 @@ public class Level : MonoBehaviour
                 
                 if (headerValid)
                 {
-                    Debug.Log("✅ EMU header validation PASSED");
+                    Debug.Log("<color=green>PASS</color> EMU header validation PASSED");
                     
                     // Read counts
                     uint vcount = reader.ReadUInt32();
@@ -1230,7 +1229,7 @@ public class Level : MonoBehaviour
                     // Validate counts match our data
                     if (vcount == worldVertices.Count && fcount == faces.Count && lcount == leafNodes.Count)
                     {
-                        Debug.Log("✅ EMU counts validation PASSED");
+                        Debug.Log("<color=green>PASS</color> EMU counts validation PASSED");
                         
                         // Check file size to ensure we wrote all expected data
                         long expectedSize = 12 + // header
@@ -1261,21 +1260,21 @@ public class Level : MonoBehaviour
                         
                         if (actualSize == expectedSize)
                         {
-                            Debug.Log("✅ EMU file size validation PASSED");
+                            Debug.Log("<color=green>PASS</color> EMU file size validation PASSED");
                         }
                         else
                         {
-                            Debug.LogWarning($"⚠️ EMU file size mismatch - difference: {actualSize - expectedSize} bytes");
+                            Debug.LogWarning($"Warning: EMU file size mismatch - difference: {actualSize - expectedSize} bytes");
                         }
                     }
                     else
                     {
-                        Debug.LogError($"❌ EMU counts mismatch - Expected: v{worldVertices.Count} f{faces.Count} l{leafNodes.Count}, Got: v{vcount} f{fcount} l{lcount}");
+                        Debug.LogError($"<color=red>ERROR</color> EMU counts mismatch - Expected: v{worldVertices.Count} f{faces.Count} l{leafNodes.Count}, Got: v{vcount} f{fcount} l{lcount}");
                     }
                 }
                 else
                 {
-                    Debug.LogError("❌ EMU header validation FAILED");
+                    Debug.LogError("<color=red>ERROR</color> EMU header validation FAILED");
                     return;
                 }
             }
@@ -1296,7 +1295,7 @@ public class Level : MonoBehaviour
             using (FileStream fs = new FileStream(filePath, FileMode.Open, FileAccess.Read))
             using (BinaryReader reader = new BinaryReader(fs))
             {
-                Debug.Log("=== EMU FILE STRUCTURE DUMP ===");
+                Debug.Log("EMU file structure dump:");
                 Debug.Log($"File size: {fs.Length} bytes");
                 
                 // Header (12 bytes)

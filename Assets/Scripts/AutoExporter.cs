@@ -21,7 +21,7 @@ public static class AutoExporter
     {
         if (state != PlayModeStateChange.ExitingPlayMode) return;
 
-        Debug.Log("=== Auto-Export: Exiting Play Mode ===");
+    Debug.Log("Auto-export: exiting play mode");
         
         // 1. RatRecorders - handled automatically
         // 2. SDFParticleRecorders - handled automatically
@@ -42,7 +42,7 @@ public static class AutoExporter
         // NEW: Validate all exported files
         ValidateExportedFiles();
         
-        Debug.Log("=== Auto-Export: Complete ===");
+    Debug.Log("Auto-export: complete");
     }
     
     /// <summary>
@@ -67,7 +67,7 @@ public static class AutoExporter
             return;
         }
         
-        Debug.Log($"=== Validating {ratFiles.Length} RAT Files ===");
+    Debug.Log($"Validating {ratFiles.Length} RAT files");
         
         int filesValidated = 0;
         int filesWithErrors = 0;
@@ -128,17 +128,17 @@ public static class AutoExporter
                                 float.IsInfinity(vertex.x) || float.IsInfinity(vertex.y) || float.IsInfinity(vertex.z))
                             {
                                 hasErrors = true;
-                                if (frame == 0) // Log only on first occurrence
-                                {
-                                    Debug.LogError($"❌ {filename}: Frame {frame} - Invalid decompressed data (NaN/Infinity)");
-                                }
+                                        if (frame == 0) // Log only on first occurrence
+                                        {
+                                            Debug.LogError($"<color=red>ERROR</color> {filename}: Frame {frame} - Invalid decompressed data (NaN/Infinity)");
+                                        }
                                 break;
                             }
                         }
                     }
                     catch (System.Exception e)
                     {
-                        Debug.LogError($"❌ {filename}: Decompression failed at frame {frame}: {e.Message}");
+                        Debug.LogError($"<color=red>ERROR</color> {filename}: Decompression failed at frame {frame}: {e.Message}");
                         hasErrors = true;
                         break;
                     }
@@ -151,12 +151,12 @@ public static class AutoExporter
                     totalAvgVertexError += avgVertexError;
                     filesValidated++;
                     
-                    Debug.Log($"✅ {filename}");
+                    Debug.Log($"<color=green>OK</color> {filename}");
                     Debug.Log($"   Frames: {framesValidated}, Vertices: {ratAnim.num_vertices}");
                     Debug.Log($"   Max quantization error: {maxVertexError:F6} units (8-bit precision limit)");
                     Debug.Log($"   Avg quantization error: {avgVertexError:F6} units");
                     Debug.Log($"   World bounds: X[{ratAnim.min_x:F3}, {ratAnim.max_x:F3}] Y[{ratAnim.min_y:F3}, {ratAnim.max_y:F3}] Z[{ratAnim.min_z:F3}, {ratAnim.max_z:F3}]");
-                    Debug.Log($"   ℹ️ Decompressed vertices will match original world-space data ±{maxVertexError:F6} units due to 8-bit quantization");
+                    Debug.Log($"   <color=blue>Note</color> Decompressed vertices will match original world-space data ±{maxVertexError:F6} units due to 8-bit quantization");
                 }
                 else if (hasErrors)
                 {
@@ -165,7 +165,7 @@ public static class AutoExporter
             }
             catch (System.Exception e)
             {
-                Debug.LogError($"❌ {filename}: Failed to validate - {e.Message}");
+                Debug.LogError($"<color=red>ERROR</color> {filename}: Failed to validate - {e.Message}");
                 filesWithErrors++;
             }
         }
@@ -177,8 +177,8 @@ public static class AutoExporter
         {
             Debug.Log($"Average max quantization error: {totalMaxVertexError / filesValidated:F6} units");
             Debug.Log($"Average avg quantization error: {totalAvgVertexError / filesValidated:F6} units");
-            Debug.Log($"ℹ️ These errors are expected and acceptable - they come from 8-bit vertex encoding");
-            Debug.Log($"ℹ️ To compare with original world-space data:");
+            Debug.Log($"<color=blue>Note</color> These errors are expected and acceptable - they come from 8-bit vertex encoding");
+            Debug.Log($"<color=blue>Note</color> To compare with original world-space data:");
             Debug.Log($"   1. Original vertices → stored in bounds (min/max)");
             Debug.Log($"   2. Quantized to 0-255 per axis");
             Debug.Log($"   3. Stored in RAT file header + vertex data");
@@ -192,8 +192,8 @@ public static class AutoExporter
         
         if (filesValidated == ratFiles.Length)
         {
-            Debug.Log("✅ All RAT files validated successfully!");
-            Debug.Log("✅ Decompressed vertex data matches original world-space values (within 8-bit quantization error)");
+            Debug.Log("<color=green>All RAT files validated successfully!</color>");
+            Debug.Log("<color=green>Decompressed vertex data matches original world-space values (within 8-bit quantization error)</color>");
         }
     }
 }

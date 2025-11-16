@@ -58,7 +58,7 @@ public static class TextureProcessor
 
         try
         {
-            Debug.Log($"🎨 Processing texture: {Path.GetFileName(outputPath)}");
+            Debug.Log($"<color=teal>Processing</color> texture: {Path.GetFileName(outputPath)}");
 
             // Determine optimal format and size
             var formatInfo = DetermineOptimalFormat(sourceTexture, targetFormat, maxSize, enablePalettes);
@@ -75,7 +75,7 @@ public static class TextureProcessor
             else
                 UnityEngine.Object.DestroyImmediate(optimizedTexture);
 
-            Debug.Log($"✅ Texture optimized: {Path.GetFileName(outputPath)} ({formatInfo.format}, {formatInfo.size}x{formatInfo.size})");
+            Debug.Log($"<color=green>OK</color> Texture optimized: {Path.GetFileName(outputPath)} ({formatInfo.format}, {formatInfo.size}x{formatInfo.size})");
             return formatInfo;
         }
         catch (System.Exception e)
@@ -488,7 +488,7 @@ public static class TextureProcessor
         byte[] pngData = texture.EncodeToPNG();
         File.WriteAllBytes(filePath, pngData);
 
-        Debug.Log($"💾 Saved optimized texture: {Path.GetFileName(filePath)} ({pngData.Length} bytes)");
+    Debug.Log($"<color=blue>Saved</color> optimized texture: {Path.GetFileName(filePath)} ({pngData.Length} bytes)");
 
         // Also save palette information for CI formats
         if (formatInfo.supportsPalette)

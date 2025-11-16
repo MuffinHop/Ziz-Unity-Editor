@@ -26,12 +26,12 @@ public class ActorEditor : Editor
                 if (actor.IsRecording)
                 {
                     actor.StopRecording();
-                    Debug.Log($"Auto-saved recording for Actor '{actor.name}' when exiting Play Mode");
+                    Debug.Log($"Auto-saved recording for actor {actor.name}");
                 }
                 else if (actor.AnimationData != null && actor.AnimationData.ratFilePaths.Count > 0)
                 {
                     actor.SaveBothFiles();
-                    Debug.Log($"Auto-saved animation data for Actor '{actor.name}' when exiting Play Mode");
+                    Debug.Log($"Auto-saved animation data for actor {actor.name}");
                 }
             }
         }
@@ -209,7 +209,7 @@ public class ActorEditor : Editor
                 
                 if (actor.IsRecording)
                 {
-                    EditorGUILayout.HelpBox("🔴 Recording both RAT and Actor data...", MessageType.Info);
+                    EditorGUILayout.HelpBox("Recording both RAT and Actor data...", MessageType.Info);
                 }
             }
             else if (!Application.isPlaying)
@@ -227,7 +227,7 @@ public class ActorEditor : Editor
         {
             if (actor.IsRecording)
             {
-                EditorGUILayout.HelpBox("🔴 Recording both RAT and Actor data automatically...\nFiles will be saved when exiting Play Mode", MessageType.Info);
+                EditorGUILayout.HelpBox("Recording both RAT and Actor data automatically...\nFiles will be saved when exiting Play Mode", MessageType.Info);
                 EditorGUILayout.LabelField($"Saving to: GeneratedData/{actor.BaseFilename}.rat & GeneratedData/{actor.BaseFilename}.act");
                 
                 if (GUILayout.Button("Stop Recording Now"))
@@ -237,12 +237,12 @@ public class ActorEditor : Editor
             }
             else if (actor.Animator != null)
             {
-                EditorGUILayout.HelpBox("✅ Recording will start automatically when animation begins\nFiles will be saved when exiting Play Mode", MessageType.Info);
+                EditorGUILayout.HelpBox("Recording starts automatically when animation begins\nFiles are saved on exiting Play Mode", MessageType.Info);
                 EditorGUILayout.LabelField($"Will save to: GeneratedData/{actor.BaseFilename}.rat & GeneratedData/{actor.BaseFilename}.act");
             }
             else
             {
-                EditorGUILayout.HelpBox("⚠️ No Animator found - recording cannot start", MessageType.Warning);
+                EditorGUILayout.HelpBox("No Animator found - recording cannot start", MessageType.Warning);
             }
         }
         else
@@ -262,15 +262,15 @@ public class ActorEditor : Editor
         
         if (Application.isPlaying)
         {
-            EditorGUILayout.HelpBox("✅ Files will be automatically saved when exiting Play Mode", MessageType.Info);
+            EditorGUILayout.HelpBox("Files are saved automatically on exiting Play Mode", MessageType.Info);
         }
         else if (actor.AnimationData != null && actor.AnimationData.ratFilePaths.Count > 0)
         {
-            EditorGUILayout.HelpBox($"✅ Previous recording found with {actor.AnimationData.ratFilePaths.Count} RAT file(s)\nReady for next Play Mode session", MessageType.Info);
+            EditorGUILayout.HelpBox($"Previous recording found with {actor.AnimationData.ratFilePaths.Count} RAT file(s)\nReady for next Play Mode session", MessageType.Info);
         }
         else
         {
-            EditorGUILayout.HelpBox("📝 Recording and file saving happens automatically during Play Mode", MessageType.Info);
+            EditorGUILayout.HelpBox("Recording and file saving happens automatically during Play Mode", MessageType.Info);
         }
         
         // Animation data info

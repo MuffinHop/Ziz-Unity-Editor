@@ -137,7 +137,7 @@ public class SDFParticleRecorder : MonoBehaviour
 
         if (targetParticleSystem == null)
         {
-            Debug.LogError("SDFParticleRecorder: No ParticleSystem found!");
+        Debug.LogError("SDFParticleRecorder - no ParticleSystem found");
             enabled = false;
             return;
         }
@@ -291,7 +291,7 @@ public class SDFParticleRecorder : MonoBehaviour
         // Force material update to generate the texture
         _sdfShapeTemplate.UpdateMaterial();
 
-        Debug.Log($"SDFParticleRecorder: Created SDF shape template ({particleShapeType}, {shapeResolution})");
+    Debug.Log($"SDFParticleRecorder - created template: {particleShapeType}, {shapeResolution}");
     }
 
     /// <summary>
@@ -312,13 +312,13 @@ public class SDFParticleRecorder : MonoBehaviour
             {
                 return;
             }
-            Debug.LogWarning("SDFParticleRecorder: No ParticleSystemRenderer found!");
+            Debug.LogWarning("SDFParticleRecorder - no ParticleSystemRenderer found");
             return;
         }
 
         if (_sdfShapeTemplate == null)
         {
-            Debug.LogWarning("SDFParticleRecorder: SDF shape template not created yet!");
+            Debug.LogWarning("SDFParticleRecorder - SDF template not created yet");
             return;
         }
 
@@ -353,7 +353,7 @@ public class SDFParticleRecorder : MonoBehaviour
                     }
                     else
                     {
-                        Debug.LogError("SDFParticleRecorder: Could not find Unlit/Transparent shader!");
+                        Debug.LogError("SDFParticleRecorder - missing Unlit/Transparent shader");
                         return;
                     }
                 }
@@ -374,7 +374,7 @@ public class SDFParticleRecorder : MonoBehaviour
             }
             else
             {
-                Debug.LogWarning("SDFParticleRecorder: SDF texture not yet generated!");
+                Debug.LogWarning("SDFParticleRecorder - SDF texture not yet generated");
             }
         }
     }
@@ -420,13 +420,13 @@ public class SDFParticleRecorder : MonoBehaviour
     {
         if (!Application.isPlaying)
         {
-            Debug.LogWarning("SDFParticleRecorder: Recording only works in Play Mode!");
+            Debug.LogWarning("SDFParticleRecorder - recording only works in Play Mode");
             return;
         }
         
         if (_isRecording)
         {
-            Debug.LogWarning("SDFParticleRecorder: Already recording!");
+            Debug.LogWarning("SDFParticleRecorder - already recording");
             return;
         }
 
@@ -485,7 +485,7 @@ public class SDFParticleRecorder : MonoBehaviour
         
         if (!_isRecording)
         {
-            Debug.LogWarning("SDFParticleRecorder: Not currently recording!");
+            Debug.LogWarning("SDFParticleRecorder - not currently recording");
             return;
         }
 
@@ -493,7 +493,7 @@ public class SDFParticleRecorder : MonoBehaviour
         
         if (_recordedFrames.Count == 0)
         {
-            Debug.LogError("SDFParticleRecorder: No frames recorded!");
+            Debug.LogError("SDFParticleRecorder - no frames recorded");
             return;
         }
 
@@ -506,7 +506,7 @@ public class SDFParticleRecorder : MonoBehaviour
     /// </summary>
     private void ExportToActAndRat()
     {
-        Debug.Log("SDFParticleRecorder: Starting export process...");
+    Debug.Log("SDFParticleRecorder - starting export");
 
         // Find maximum particle count across all frames
         int maxParticles = 0;
@@ -516,7 +516,7 @@ public class SDFParticleRecorder : MonoBehaviour
                 maxParticles = frame.particles.Count;
         }
 
-        Debug.Log($"SDFParticleRecorder: Max particles in any frame: {maxParticles}");
+    Debug.Log($"SDFParticleRecorder - max particles per frame: {maxParticles}");
 
         // Generate mesh data (quad per particle)
         // Each particle is a quad with 4 vertices
@@ -633,7 +633,7 @@ public class SDFParticleRecorder : MonoBehaviour
             _sdfShapeTemplate.EnsureTextureExported();
         }
 
-        Debug.Log($"SDFParticleRecorder: Using texture: {textureFilename}");
+    Debug.Log($"SDFParticleRecorder - using texture: {textureFilename}");
 
         // Create a dummy mesh with the quad topology
         Mesh quadMesh = new Mesh();
@@ -645,7 +645,7 @@ public class SDFParticleRecorder : MonoBehaviour
         List<Rat.ActorTransformFloat> frameTransforms = new List<Rat.ActorTransformFloat>(_recordedTransforms);
         if (frameTransforms.Count != frameVertices.Count)
         {
-            UnityEngine.Debug.LogWarning($"SDFParticleRecorder: Frame count ({frameVertices.Count}) does not match recorded transforms ({frameTransforms.Count}).");
+            UnityEngine.Debug.LogWarning($"SDFParticleRecorder - frame count ({frameVertices.Count}) doesn't match transforms ({frameTransforms.Count})");
         }
 
         try
@@ -664,11 +664,11 @@ public class SDFParticleRecorder : MonoBehaviour
                 frameTransforms  // Pass transforms
             );
             
-            Debug.Log($"SDFParticleRecorder: Export complete - transforms baked into vertices");
+            Debug.Log($"SDFParticleRecorder - export complete (transforms baked into vertices)");
         }
         catch (System.Exception e)
         {
-            Debug.LogError($"SDFParticleRecorder: Export failed - {e.Message}");
+            Debug.LogError($"SDFParticleRecorder - export failed: {e.Message}");
         }
     }
 
@@ -700,7 +700,7 @@ public class SDFParticleRecorder : MonoBehaviour
             // Auto-export if we have recorded frames and auto-export is enabled
             if (autoExportOnPlayModeExit && _isRecording && _recordedFrames != null && _recordedFrames.Count > 0)
             {
-                Debug.Log($"SDFParticleRecorder: Auto-exporting on play mode exit ({_recordedFrames.Count} frames recorded)");
+                Debug.Log($"SDFParticleRecorder - auto-exporting on play mode exit ({_recordedFrames.Count} frames)");
                 StopRecordingAndExport();
             }
         }

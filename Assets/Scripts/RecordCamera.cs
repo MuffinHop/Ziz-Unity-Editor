@@ -28,11 +28,11 @@ public class RecordCamera : MonoBehaviour
     public string fileName = "camera_track";
     public float recordingFPS = 30f; // Target recording frame rate
 
-    // New: export options for coordinate conventions
-    [Tooltip("If true, flip the Z axis when exporting (Unity → right-handed).")]
+    // export options for coordinate conventions
+    [Tooltip("Flip Z axis on export (Unity -> right-handed)")]
     public bool flipZ = true;
 
-    [Tooltip("If true, when flipping Z also invert Y/Z Euler angles to match reflected coordinate system.")]
+    [Tooltip("Invert Y/Z Euler angles when flipping Z")]
     public bool flipRotationWithZ = true;
 
     [Header("Debug Info")]
@@ -71,10 +71,10 @@ public class RecordCamera : MonoBehaviour
         // Start recording immediately
         isRecording = true;
         lastRecordTime = Time.time; // Initialize recording timer
-        Debug.Log("=== CAMERA RECORDING STARTED AUTOMATICALLY ===");
-        Debug.Log($"Recording at {recordingFPS} FPS");
-        Debug.Log("Recording camera keyframes from start to end...");
-        Debug.Log("File will be saved automatically when application quits");
+    Debug.Log("Camera recording started");
+    Debug.Log($"Recording at {recordingFPS} FPS");
+    Debug.Log("Recording camera keyframes");
+    Debug.Log("File will be saved on application quit");
     }
     
     void Update()
@@ -108,7 +108,7 @@ public class RecordCamera : MonoBehaviour
         // Save the recording when the application quits
         if (floatKeyframes.Count > 0)
         {
-            Debug.Log("=== APPLICATION ENDING - SAVING CAMERA DATA ===");
+            Debug.Log("Application ending - saving camera data");
             SaveCameraFile();
         }
         else
@@ -133,11 +133,11 @@ public class RecordCamera : MonoBehaviour
         
         if (isRecording)
         {
-            Debug.Log("=== CAMERA RECORDING RESUMED ===");
+            Debug.Log("Camera recording resumed");
         }
         else
         {
-            Debug.Log("=== CAMERA RECORDING PAUSED ===");
+            Debug.Log("Camera recording paused");
         }
     }
     
@@ -257,7 +257,7 @@ public class RecordCamera : MonoBehaviour
             long fileSize = new FileInfo(filePath).Length;
             long expectedSize = 40 + (keyframes.Count * 13); // Header: 40 bytes, Keyframe: 13 bytes
             
-            Debug.Log("=== CAMERA DATA SAVED ===");
+            Debug.Log("Camera data saved");
             Debug.Log($"Saved {keyframes.Count} camera keyframes to {filePath}");
             Debug.Log($"Recording FPS: {recordingFPS} (captured at {recordingFPS} frames per second)");
             Debug.Log($"Total recording duration: {keyframes.Count / recordingFPS:F1} seconds");

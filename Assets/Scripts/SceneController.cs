@@ -337,7 +337,7 @@ public class SceneController : MonoBehaviour
             string actPath = actor.BaseFilename + ".act";
             trackedComponents.Add(new TrackedComponent(actor, actor.gameObject.name, actPath, ComponentType.Actor, currentId++));
             
-            Debug.Log($"Actor '{actor.gameObject.name}': Scene file will reference '{actPath}'");
+            Debug.Log($"Scene will reference actor {actor.gameObject.name}: {actPath}");
         }
 
         // Find all Level components
@@ -364,7 +364,7 @@ public class SceneController : MonoBehaviour
             // The .act file is created by the ExportAllShapesToRATs function
             string actPath = $"{representative.gameObject.name}.act";
             
-            Debug.Log($"Shape '{representative.gameObject.name}': Scene file will reference '{actPath}'");
+            Debug.Log($"Scene will reference shape {representative.gameObject.name}: {actPath}");
             
             trackedComponents.Add(new TrackedComponent(representative, representative.gameObject.name, actPath, ComponentType.Shape, currentId++));
         }
@@ -377,7 +377,7 @@ public class SceneController : MonoBehaviour
             // The .act file is created by the SkyBox.ExportToRAT function
             string actPath = $"{skyBox.gameObject.name}.act";
             
-            Debug.Log($"SkyBox '{skyBox.gameObject.name}': Scene file will reference '{actPath}'");
+            Debug.Log($"Scene will reference skybox {skyBox.gameObject.name}: {actPath}");
             
             trackedComponents.Add(new TrackedComponent(skyBox, skyBox.gameObject.name, actPath, ComponentType.Shape, currentId++));
         }
@@ -390,13 +390,13 @@ public class SceneController : MonoBehaviour
             string actPath = $"{recorder.baseFilename}.act";
             trackedComponents.Add(new TrackedComponent(recorder, recorder.gameObject.name, actPath, ComponentType.Actor, currentId++));
             
-            Debug.Log($"Particle System '{recorder.gameObject.name}': Scene file will reference '{actPath}'");
+            Debug.Log($"Scene will reference particle system {recorder.gameObject.name}: {actPath}");
         }
         
         // Sort by ID to ensure consistent order
         trackedComponents.Sort((a, b) => a.id.CompareTo(b.id));
         
-        Debug.Log($"SceneController: Initialized {trackedComponents.Count} tracked components");
+    Debug.Log($"Initialized {trackedComponents.Count} tracked components");
     }
 
     /// <summary>
@@ -578,7 +578,7 @@ public class SceneController : MonoBehaviour
         FileLogger.Log($"  Offset 0x{headerSize + componentSize:X2}:            Keyframes ({keyframesSize:N0} bytes, {keyframes.Count} entries)");
         FileLogger.Log($"  Total Calculated:       {totalCalculated:N0} bytes");
         FileLogger.Log($"  Actual File Size:       {fileInfo.Length:N0} bytes");
-        FileLogger.Log($"  Match:                  {(totalCalculated == fileInfo.Length ? "✓ YES" : "✗ NO")}");
+    FileLogger.Log($"  Match:                  {(totalCalculated == fileInfo.Length ? "<color=green>OK</color>" : "<color=red>NO</color>")}");
         
         // Memory Efficiency
         FileLogger.LogSection("COMPRESSION & EFFICIENCY");
