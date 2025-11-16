@@ -577,10 +577,16 @@ public class SDFParticleRecorder : MonoBehaviour
                     up = rot * up;
                 }
 
-                vertices[vertexOffset + 0] = particle.position - right - up; // Bottom-left
-                vertices[vertexOffset + 1] = particle.position + right - up; // Bottom-right
-                vertices[vertexOffset + 2] = particle.position - right + up; // Top-left
-                vertices[vertexOffset + 3] = particle.position + right + up; // Top-right
+                // Convert particle position into the particle system's local space if necessary
+                var simulationSpace = targetParticleSystem.main.simulationSpace;
+                Vector3 localPos = particle.position;
+                if (simulationSpace == ParticleSystemSimulationSpace.World)
+                    localPos = transform.InverseTransformPoint(particle.position);
+
+                vertices[vertexOffset + 0] = localPos - right - up; // Bottom-left
+                vertices[vertexOffset + 1] = localPos + right - up; // Bottom-right
+                vertices[vertexOffset + 2] = localPos - right + up; // Top-left
+                vertices[vertexOffset + 3] = localPos + right + up; // Top-right
 
                 // Set colors for this particle's quad
                 for (int v = 0; v < 4; v++)

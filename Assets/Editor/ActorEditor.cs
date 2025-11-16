@@ -41,8 +41,92 @@ public class ActorEditor : Editor
     {
         Actor actor = (Actor)target;
         
-        // Draw default inspector
+        // Draw default inspector fields first (keeps other settings intact)
         DrawDefaultInspector();
+
+        // Add a rendering mode selector and main texture picker
+        EditorGUILayout.Space();
+        EditorGUILayout.LabelField("Material & Rendering", EditorStyles.boldLabel);
+
+        // Rendering mode selector
+        var newMode = (Rat.ActorRenderingMode)EditorGUILayout.EnumPopup("Rendering Mode", actor.renderingMode);
+        if (newMode != actor.renderingMode)
+        {
+            actor.SetRenderingMode(newMode);
+            EditorUtility.SetDirty(actor);
+        }
+
+    // Texture picker - allow empty for MatCap or vertex-colour modes
+    Texture2D currentTexture = actor.GetAssignedTexture();
+        Texture2D pickedTexture = (Texture2D)EditorGUILayout.ObjectField("Main Texture", currentTexture, typeof(Texture2D), false);
+        if (pickedTexture != currentTexture)
+        {
+            // Convert asset path into relative path used by Actor
+            string path = AssetDatabase.GetAssetPath(pickedTexture);
+            if (!string.IsNullOrEmpty(path) && path.StartsWith("Assets/"))
+                path = path.Substring("Assets/".Length);
+            actor.SetTextureFilename(path);
+            EditorUtility.SetDirty(actor);
+        }
+
+        // Show the selected texture filename relative to Assets (used by exports)
+        EditorGUILayout.LabelField("Texture (relative path)", actor.TextureFilename ?? "(none)");
+        EditorGUI.BeginDisabledGroup(actor.renderingMode == Rat.ActorRenderingMode.MatCap && actor.GetAssignedTexture() == null);
+        if (GUILayout.Button("Clear Texture"))
+        {
+            actor.SetTextureFilename("");
+            EditorUtility.SetDirty(actor);
+        }
+        EditorGUI.EndDisabledGroup();
+
+        if (actor.renderingMode == Rat.ActorRenderingMode.MatCap)
+        {
+            if (actor.GetAssignedTexture() == null)
+            {
+                EditorGUILayout.HelpBox("MatCap mode requires a texture. Please assign a Main Texture or use Auto-select.", MessageType.Warning);
+                if (GUILayout.Button("Auto-select MatCap Texture from Project"))
+                {
+                    // Find a matcap texture in the project and set it
+                    string[] guids = UnityEditor.AssetDatabase.FindAssets("MatCap t:Texture2D");
+                    string chosenPath = null;
+                    if (guids.Length > 0)
+                    {
+                        chosenPath = UnityEditor.AssetDatabase.GUIDToAssetPath(guids[0]);
+                    }
+                    else
+                    {
+                        // Try common paths
+                        string[] potentials = new[] { "Assets/MatCaps/default.png", "Assets/MatCaps/matcap.png", "Assets/Textures/MatCap.png", "Assets/Shaders/MatCap.png" };
+                        foreach (var p in potentials)
+                        {
+                            if (System.IO.File.Exists(p))
+                            {
+                                chosenPath = p;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!string.IsNullOrEmpty(chosenPath))
+                    {
+                        // Trim the leading "Assets/" for Actor.SetTextureFilename
+                        string relative = chosenPath.StartsWith("Assets/") ? chosenPath.Substring("Assets/".Length) : chosenPath;
+                        actor.SetTextureFilename(relative);
+                        EditorUtility.SetDirty(actor);
+                    }
+                    else
+                    {
+                        EditorUtility.DisplayDialog("MatCap not found", "No MatCap texture found in the project. Add one to Assets/MatCaps or Assets/Textures.", "OK");
+                    }
+                }
+            }
+            else
+            {
+                EditorGUILayout.HelpBox("MatCap mode will use the assigned Main Texture as the matcap.", MessageType.Info);
+            }
+        }
+
+        EditorGUILayout.Space();
         
         // Add spacing
         EditorGUILayout.Space();
@@ -79,6 +163,19 @@ public class ActorEditor : Editor
         {
             string rendererType = meshRenderer != null ? "MeshRenderer" : "SkinnedMeshRenderer";
             EditorGUILayout.HelpBox($"✓ {rendererType} found", MessageType.Info);
+            // Applied Shader + reapply button
+            string shaderName = null;
+            var renderer = meshRenderer != null ? (Renderer)meshRenderer : (Renderer)skinnedMeshRenderer;
+            if (renderer != null && renderer.sharedMaterial != null)
+                shaderName = renderer.sharedMaterial.shader != null ? renderer.sharedMaterial.shader.name : "(none)";
+                EditorGUILayout.LabelField("Applied Shader", shaderName ?? "(no renderer/material)");
+                EditorGUI.BeginDisabledGroup(actor.renderingMode == Rat.ActorRenderingMode.MatCap && actor.GetAssignedTexture() == null);
+                if (GUILayout.Button("Re-apply Shader & Material"))
+                {
+                    actor.SetRenderingMode(actor.renderingMode);
+                    EditorUtility.SetDirty(actor);
+                }
+                EditorGUI.EndDisabledGroup();
         }
         
         // Check for animator

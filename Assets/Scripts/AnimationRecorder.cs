@@ -114,8 +114,8 @@ public class AnimationRecorder : MonoBehaviour
         var mf = GetComponent<MeshFilter>();
         if (_sourceMesh == null) _sourceMesh = mf.sharedMesh;
         
-        // Transform quad vertices by current transform
-        var verts = _sourceMesh.vertices.Select(v => transform.TransformPoint(v)).ToArray();
+        // Keep vertices in local space and let ExportAnimation bake transforms
+        var verts = _sourceMesh.vertices.ToArray();
         _frames.Add(verts);
     }
     
@@ -127,11 +127,12 @@ public class AnimationRecorder : MonoBehaviour
         
         // Generate quad mesh for each particle
         List<Vector3> frameVerts = new List<Vector3>();
-        for (int i = 0; i < count; i++)
+            var simulationSpace = ps.main.simulationSpace;
+            for (int i = 0; i < count; i++)
         {
             var p = particles[i];
-            var size = p.GetCurrentSize(ps) * 0.5f;
-            var pos = p.position;
+                var size = p.GetCurrentSize(ps) * 0.5f;
+                var pos = simulationSpace == ParticleSystemSimulationSpace.World ? transform.InverseTransformPoint(p.position) : p.position;
             
             frameVerts.Add(pos + new Vector3(-size, -size, 0));
             frameVerts.Add(pos + new Vector3(size, -size, 0));

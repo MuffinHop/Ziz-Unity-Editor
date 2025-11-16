@@ -998,7 +998,8 @@ namespace Rat
             string textureFilename = "",
             int maxFileSizeKB = 64,
             ActorRenderingMode renderingMode = ActorRenderingMode.TextureWithDirectionalLight,
-            List<ActorTransformFloat> customTransforms = null)
+            List<ActorTransformFloat> customTransforms = null,
+            bool flipZ = true)
         {
             if (vertexFrames == null || vertexFrames.Count == 0)
             {
@@ -1029,12 +1030,13 @@ namespace Rat
                     var transformedVertices = new UnityEngine.Vector3[vertexFrames[frameIndex].Length];
                     for (int vertexIndex = 0; vertexIndex < vertexFrames[frameIndex].Length; vertexIndex++)
                     {
-                        transformedVertices[vertexIndex] = transformMatrix.MultiplyPoint3x4(vertexFrames[frameIndex][vertexIndex]);
+                        var v = transformMatrix.MultiplyPoint3x4(vertexFrames[frameIndex][vertexIndex]);
+                        transformedVertices[vertexIndex] = v;
                     }
                     
                     processedFrames.Add(transformedVertices);
                 }
-                UnityEngine.Debug.Log($"ExportAnimation: Transform baking complete - vertices now in world space");
+                UnityEngine.Debug.Log($"ExportAnimation: Transform baking complete - vertices now in world space{(flipZ ? " (Z-flipped)" : "")}");
             }
             else if (customTransforms == null)
             {
@@ -1046,7 +1048,44 @@ namespace Rat
             // - Calculate bounds from transformed frames
             // - Quantize to 8-bit using bounds
             // - Store bounds in RAT header
-            var compressed = CompressFromFrames(processedFrames, sourceMesh, capturedUVs, capturedColors);
+            // If we flipped Z, triangle winding must be reversed to preserve face orientation
+            UnityEngine.Mesh meshToUse = sourceMesh;
+            if (flipZ && sourceMesh != null)
+            {
+                // Clone the mesh to avoid mutating the original
+                meshToUse = new UnityEngine.Mesh();
+                meshToUse.vertices = sourceMesh.vertices;
+                meshToUse.uv = sourceMesh.uv;
+                meshToUse.colors = sourceMesh.colors;
+                var tris = sourceMesh.triangles;
+                var reversed = new int[tris.Length];
+                for (int i = 0; i < tris.Length; i += 3)
+                {
+                    // invert winding
+                    reversed[i] = tris[i];
+                    reversed[i + 1] = tris[i + 2];
+                    reversed[i + 2] = tris[i + 1];
+                }
+                meshToUse.triangles = reversed;
+                meshToUse.RecalculateBounds();
+            }
+
+            // If we requested a Z-flip but frames are already in world space (no transforms), flip vertex coordinates here
+            if (flipZ)
+            {
+                for (int f = 0; f < processedFrames.Count; f++)
+                {
+                    var frame = processedFrames[f];
+                    for (int i = 0; i < frame.Length; i++)
+                    {
+                        var p = frame[i];
+                        p.z = -p.z;
+                        frame[i] = p;
+                    }
+                }
+            }
+
+            var compressed = CompressFromFrames(processedFrames, meshToUse, capturedUVs, capturedColors);
             if (compressed == null)
             {
                 UnityEngine.Debug.LogError("ExportAnimation: Compression failed");
@@ -1076,6 +1115,42 @@ namespace Rat
             string baseFilePath = System.IO.Path.Combine(generatedDataPath, baseFilename);
             var ratFiles = WriteRatFileWithSizeSplitting(baseFilePath, compressed, maxFileSizeKB);
 
+            // Validation step (editor/debug): read back the RAT and compare decompressed vertices to expected world-space positions
+            try
+            {
+                if (ratFiles.Count > 0)
+                {
+                    string firstRat = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(ratFiles[0]) ?? "", System.IO.Path.GetFileName(ratFiles[0]));
+                    var ratAnim = Core.ReadRatFile(firstRat);
+                    var ctx = Core.CreateDecompressionContext(ratAnim);
+                    Core.DecompressToFrame(ctx, ratAnim, 0);
+                    // Convert decompressed vertices to world-space floats
+                    var decompressed = new UnityEngine.Vector3[ratAnim.num_vertices];
+                    for (int i = 0; i < ratAnim.num_vertices; i++)
+                    {
+                        var v = ratAnim.first_frame[i];
+                        float x = ratAnim.min_x + (v.x / 255f) * (ratAnim.max_x - ratAnim.min_x);
+                        float y = ratAnim.min_y + (v.y / 255f) * (ratAnim.max_y - ratAnim.min_y);
+                        float z = ratAnim.min_z + (v.z / 255f) * (ratAnim.max_z - ratAnim.min_z);
+                        decompressed[i] = new UnityEngine.Vector3(x, y, z);
+                    }
+                    // Compare to expected from processedFrames[0]
+                    float maxError = 0f;
+                    var expected = processedFrames[0];
+                    int count = Math.Min(expected.Length, decompressed.Length);
+                    for (int i = 0; i < count; i++)
+                    {
+                        float e = UnityEngine.Vector3.Distance(expected[i], decompressed[i]);
+                        maxError = Math.Max(maxError, e);
+                    }
+                    UnityEngine.Debug.Log($"ExportValidation: Decompressed first frame max error {maxError:F6} units (after quantization)");
+                }
+            }
+            catch (System.Exception e)
+            {
+                UnityEngine.Debug.LogWarning($"ExportValidation: Validation failed - {e.Message}");
+            }
+
             // STEP 4: Create ACT file
             // Contains: mesh data (UVs, colors, indices) + RAT file references
             // Transform data is identity-only since all animation is in vertices
@@ -1084,9 +1159,9 @@ namespace Rat
             actorData.ratFilePaths.AddRange(ratFiles.ConvertAll(System.IO.Path.GetFileName));
             
             // Extract mesh data from source mesh
-            actorData.meshUVs = capturedUVs ?? sourceMesh.uv;
-            actorData.meshColors = capturedColors ?? sourceMesh.colors;
-            actorData.meshIndices = sourceMesh.triangles;
+            actorData.meshUVs = capturedUVs ?? (meshToUse != null ? meshToUse.uv : sourceMesh.uv);
+            actorData.meshColors = capturedColors ?? (meshToUse != null ? meshToUse.colors : sourceMesh.colors);
+            actorData.meshIndices = (meshToUse != null ? meshToUse.triangles : sourceMesh.triangles);
             actorData.textureFilename = cleanTextureFilename;
 
             string actFilePath = System.IO.Path.Combine(generatedDataPath, $"{baseFilename}.act");

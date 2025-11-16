@@ -91,7 +91,8 @@ public class Actor : MonoBehaviour
     // Auto-generated fields (not shown in Inspector)
     private string ratFilePath = "";    // Auto-generated from transform name
     private string baseFilename = "";   // Auto-generated from transform name
-    private string textureFilename = "";// Auto-generated texture filename
+    [SerializeField]
+    private string textureFilename = ""; // Auto-generated texture filename (serialized so editor changes persist)
 
     // Non-serialized fields
     private long currentKeyFrame;
@@ -170,13 +171,7 @@ public class Actor : MonoBehaviour
     /// </summary>
     private void GenerateAndProcessTexture(string cleanName)
     {
-        // MatCap rendering mode doesn't use _MainTex, so skip texture processing
-        if (renderingMode == Rat.ActorRenderingMode.MatCap)
-        {
-            Debug.Log($"Actor '{name}': Using MatCap rendering mode - no main texture needed.");
-            textureFilename = "";
-            return;
-        }
+        // NOTE: MatCap rendering mode *does* sample from _MainTex when provided. Allow texture processing for MatCap.
         
         try
         {
@@ -386,17 +381,34 @@ public class Actor : MonoBehaviour
             {
                 material.SetTexture("_MainTex", texture);
                 Debug.Log($"Actor '{name}': Applied texture '{texture.name}' to {renderingMode} shader");
+                // If we have a material-assigned main texture but no explicit textureFilename configured, set it (Editor only)
+#if UNITY_EDITOR
+                if (string.IsNullOrEmpty(textureFilename))
+                {
+                    string path = UnityEditor.AssetDatabase.GetAssetPath(texture);
+                    if (!string.IsNullOrEmpty(path) && path.StartsWith("Assets/"))
+                        textureFilename = path.Substring("Assets/".Length);
+                }
+#endif
             }
         }
         
         // Load and assign matcap texture if needed
         if (renderingMode == Rat.ActorRenderingMode.MatCap)
         {
-            Texture2D matcap = LoadMatcapTexture();
+            // Prefer the explicit main texture set on the actor (if any)
+            Texture2D matcap = LoadTextureForActor();
+            if (matcap == null)
+            {
+                // fallback to a discovered matcap in the project
+                matcap = LoadMatcapTexture();
+            }
             if (matcap != null)
             {
+                // Modern MatCap shaders sample from _MainTex - ensure both properties are set so both shader variants work
+                material.SetTexture("_MainTex", matcap);
                 material.SetTexture("_Matcap", matcap);
-                Debug.Log($"Actor '{name}': Applied matcap texture '{matcap.name}'");
+                Debug.Log($"Actor '{name}': Applied matcap texture '{matcap.name}' to _MainTex and _Matcap");
             }
         }
         
@@ -404,6 +416,49 @@ public class Actor : MonoBehaviour
         renderer.material = material;
         
         Debug.Log($"Actor '{name}': Applied shader '{shaderName}' for rendering mode '{renderingMode}'");
+    }
+
+    /// <summary>
+    /// Sets the actor's texture filename (path relative to Assets/) and applies it to material.
+    /// </summary>
+    public void SetTextureFilename(string relativePath)
+    {
+        textureFilename = relativePath ?? "";
+        // Re-apply shader/material to pick up texture change
+        SetupShaderAndMaterial();
+    }
+
+    /// <summary>
+    /// Sets rendering mode and updates the material/shader.
+    /// </summary>
+    public void SetRenderingMode(Rat.ActorRenderingMode mode)
+    {
+        renderingMode = mode;
+        // If switching to MatCap, ensure we have a texture. In the Editor, try to auto-select a project MatCap if none set.
+#if UNITY_EDITOR
+        if (renderingMode == Rat.ActorRenderingMode.MatCap && string.IsNullOrEmpty(textureFilename))
+        {
+            // Try to auto-select a MatCap texture in the project
+            string[] guids = UnityEditor.AssetDatabase.FindAssets("MatCap t:Texture2D");
+            if (guids.Length > 0)
+            {
+                string matcapPath = UnityEditor.AssetDatabase.GUIDToAssetPath(guids[0]);
+                if (!string.IsNullOrEmpty(matcapPath) && matcapPath.StartsWith("Assets/"))
+                {
+                    SetTextureFilename(matcapPath.Substring("Assets/".Length));
+                }
+            }
+        }
+#endif
+        SetupShaderAndMaterial();
+    }
+
+    /// <summary>
+    /// Returns the currently assigned main texture (either from chosen textureFilename or from material).
+    /// </summary>
+    public Texture2D GetAssignedTexture()
+    {
+        return LoadTextureForActor();
     }
     
     /// <summary>
@@ -918,6 +973,30 @@ public class Actor : MonoBehaviour
             Debug.Log($"RAT file paths: {string.Join(", ", AnimationData.ratFilePaths)}");
             Debug.Log($"Framerate: {AnimationData.framerate}");
             
+            // Ensure that MatCap rendering mode has a texture assigned
+            if (renderingMode == Rat.ActorRenderingMode.MatCap)
+            {
+                // Check assigned texture filename or try to load assigned texture from material
+                if (string.IsNullOrEmpty(AnimationData.textureFilename))
+                {
+#if UNITY_EDITOR
+                    var assigned = GetAssignedTexture();
+                    if (assigned != null)
+                    {
+                        string path = UnityEditor.AssetDatabase.GetAssetPath(assigned);
+                        if (!string.IsNullOrEmpty(path) && path.StartsWith("Assets/"))
+                            AnimationData.textureFilename = path.Substring("Assets/".Length);
+                    }
+#endif
+                }
+
+                if (string.IsNullOrEmpty(AnimationData.textureFilename))
+                {
+                    Debug.LogError($"Actor '{name}': MatCap rendering mode requires a texture. Assign one before exporting.");
+                    return;
+                }
+            }
+
             // Save Actor data with mesh information only (no transforms)
             SaveActorData(actorFilePath, AnimationData, renderingMode);
             

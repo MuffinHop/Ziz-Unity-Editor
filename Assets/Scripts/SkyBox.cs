@@ -430,59 +430,24 @@ namespace ZizSceneEditor.Assets.Scripts.Shapes
 
             var mesh = meshFilter.sharedMesh;
             
-            // Create single frame data (static mesh)
-            var frames = new List<UnityEngine.Vector3[]>();
-            frames.Add(mesh.vertices);
-            
-            // Use mesh colors, generate default UVs if none exist
+            // Use mesh colors and generate default UVs if none exist
             var colors = mesh.colors.Length > 0 ? mesh.colors : null;
             var uvs = mesh.uv.Length > 0 ? mesh.uv : GenerateDefaultUVs(mesh.vertices.Length);
             
-            // Compress using RAT (single frame)
-            var compressed = Rat.Tool.CompressFromFrames(frames, mesh, uvs, colors);
-            if (compressed == null)
-            {
-                Debug.LogError("SkyBox: RAT compression failed!");
-                return;
-            }
-            
-            // Set filenames (no texture for vertex-colored skybox)
-            // Note: mesh_data_filename is referenced by RAT but actual mesh data is embedded in .act file
-            compressed.texture_filename = "";
-            compressed.mesh_data_filename = $"{gameObject.name}.ratmesh";
-            
-            // Save to GeneratedData directory
-            string generatedDataPath = System.IO.Path.Combine(Application.dataPath.Replace("Assets", ""), "GeneratedData");
-            if (!System.IO.Directory.Exists(generatedDataPath))
-                System.IO.Directory.CreateDirectory(generatedDataPath);
-            
-            string basePath = System.IO.Path.Combine(generatedDataPath, gameObject.name);
-            var createdFiles = Rat.Tool.WriteRatFileWithSizeSplitting(basePath, compressed);
-            
-            Debug.Log($"SkyBox: Exported to RAT - {createdFiles.Count} file(s): {string.Join(", ", createdFiles)}");
-            
-            // Create .act file for this SkyBox
-            ActorAnimationData actorData = new ActorAnimationData();
-            actorData.framerate = 30f; // Default framerate for static mesh
-            
-            // Add all RAT files to the actor data
-            foreach (string ratFile in createdFiles.Where(f => f.EndsWith(".rat")))
-            {
-                actorData.ratFilePaths.Add(System.IO.Path.GetFileName(ratFile));
-            }
-            
-            // Extract mesh data
-            actorData.meshUVs = uvs;
-            actorData.meshColors = colors ?? new Color[mesh.vertexCount];
-            actorData.meshIndices = mesh.triangles;
-            actorData.textureFilename = "";
-            
-            // Save .act file to root GeneratedData directory
-            string actFilePath = System.IO.Path.Combine(generatedDataPath, $"{gameObject.name}.act");
-            Actor.SaveActorData(actFilePath, actorData, Rat.ActorRenderingMode.VertexColoursOnly, embedMeshData: true);
-            
-            Debug.Log($"SkyBox: Created .act file: {actFilePath}");
-            Debug.Log($"  - RAT files: {string.Join(", ", createdFiles.Select(f => System.IO.Path.GetFileName(f)))}");
+            // Use unified ExportAnimation which handles transform baking, Z-flip, RAT+ACT export
+            var frames = new List<UnityEngine.Vector3[]> { mesh.vertices };
+            var actorTransforms = new List<Rat.ActorTransformFloat>() {
+                new Rat.ActorTransformFloat {
+                    position = transform.position,
+                    rotation = transform.eulerAngles,
+                    scale = transform.localScale,
+                    rat_file_index = 0,
+                    rat_local_frame = 0
+                }
+            };
+
+            Rat.Tool.ExportAnimation(gameObject.name, frames, mesh, uvs, colors, 30f, "", 64, Rat.ActorRenderingMode.VertexColoursOnly, actorTransforms, true);
+            Debug.Log($"SkyBox: Exported to RAT+ACT via unified ExportAnimation API");
         }
         
         /// <summary>

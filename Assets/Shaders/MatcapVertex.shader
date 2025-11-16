@@ -2,7 +2,7 @@ Shader "Custom/MatcapVertex"
 {
     Properties
     {
-        _Matcap ("Matcap Texture", 2D) = "white" {}
+        _MainTex ("Matcap Texture", 2D) = "white" {}
     }
     SubShader
     {
@@ -26,8 +26,8 @@ Shader "Custom/MatcapVertex"
                 float2 matcapUV : TEXCOORD0;
             };
 
-            sampler2D _Matcap;
-            float4 _Matcap_ST;
+            sampler2D _MainTex;
+            float4 _MainTex_ST;
 
             v2f vert (appdata v)
             {
@@ -46,7 +46,7 @@ Shader "Custom/MatcapVertex"
             fixed4 frag (v2f i) : SV_Target
             {
                 // Sample the matcap texture
-                return tex2D(_Matcap, i.matcapUV);
+                return tex2D(_MainTex, i.matcapUV);
             }
             ENDCG
         }

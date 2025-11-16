@@ -143,7 +143,7 @@ public class SDFShape : MonoBehaviour
             if (!frameTransforms.ContainsKey(frame))
                 frameTransforms[frame] = new Dictionary<SDFShape, TransformData>();
             frameTransforms[frame][this] = new TransformData {
-                position = new Vector3(transform.position.x, transform.position.y, -transform.position.z), // Flip Z for right-handed coordinates
+                position = transform.position,
                 rotation = transform.rotation,
                 scale = transform.localScale,
                 time = Time.time // record timestamp for resampling
@@ -677,8 +677,12 @@ public class SDFShape : MonoBehaviour
                 totalSdfVertices += 4;
             }
 
-            float sdfFrameRate = CalculateHypotheticalFrameRate(totalSdfVertices);
-            Debug.Log($"[Performance] SDF FPS: {sdfFrameRate:F1} | Vertices: {totalSdfVertices}");
+            // Only log once every 5 seconds (assuming 60 FPS, that's every 300 frames)
+            if (Time.frameCount % 300 == 0)
+            {
+                float sdfFrameRate = CalculateHypotheticalFrameRate(totalSdfVertices);
+                Debug.Log($"[Performance] SDF FPS: {sdfFrameRate:F1} | Vertices: {totalSdfVertices}");
+            }
         }
         catch
         {
@@ -775,10 +779,11 @@ public class SDFShape : MonoBehaviour
 
                 if (shapeTransform.HasValue)
                 {
-                    Matrix4x4 matrix = Matrix4x4.TRS(shapeTransform.Value.position, shapeTransform.Value.rotation, shapeTransform.Value.scale);
+                    // Do NOT pre-bake transforms; store local mesh vertices and let ExportAnimation bake them.
+                    var localVerts = quadMesh.vertices;
                     for (int i = 0; i < vertexCount; i++)
                     {
-                        vertices[i] = matrix.MultiplyPoint3x4(quadMesh.vertices[i]);
+                        vertices[i] = localVerts[i];
                     }
                     
                     // Store transform for baking

@@ -2,7 +2,7 @@ Shader "Actor/MatCap"
 {
     Properties
     {
-        _Matcap ("Matcap Texture", 2D) = "white" {}
+        _MainTex ("Matcap Texture", 2D) = "white" {}
     }
     SubShader
     {
@@ -28,8 +28,8 @@ Shader "Actor/MatCap"
                 fixed4 color : COLOR;
             };
 
-            sampler2D _Matcap;
-            float4 _Matcap_ST;
+            sampler2D _MainTex;
+            float4 _MainTex_ST;
 
             v2f vert (appdata v)
             {
@@ -49,7 +49,7 @@ Shader "Actor/MatCap"
             fixed4 frag (v2f i) : SV_Target
             {
                 // Sample the matcap texture
-                return tex2D(_Matcap, i.matcapUV) * i.color;
+                return tex2D(_MainTex, i.matcapUV) * i.color;
             }
             ENDCG
         }
