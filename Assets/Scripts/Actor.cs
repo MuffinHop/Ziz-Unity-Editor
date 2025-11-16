@@ -79,10 +79,16 @@ public enum ActorRenderingMode
 
 public class Actor : MonoBehaviour
 {
+    // NOTE: When exporting, all vertex animation and per-frame transforms are baked into RAT files.
+    // The .act file contains static mesh data + references to the RAT files (no transforms).
+    // If an Actor has an Animator plus external transform modifications, recordUntilManualStop can be used
+    // to ensure the full transform motion over the entire play session is captured (default: false).
     public ActorAnimationData AnimationData { get; private set; } = new ActorAnimationData();
     
     [Header("Recording Settings")]
     public bool record = false;
+    [Tooltip("If true, recording continues until StopRecording is called, even if the animation clip is shorter.")]
+    public bool recordUntilManualStop = false;
 
     [Header("Material & Rendering Settings")]
     [Tooltip("Choose the material and lighting mode for this actor")]
@@ -861,12 +867,21 @@ public class Actor : MonoBehaviour
                 ratRecorder.targetMeshFilter = GetComponent<MeshFilter>();
         }
         
-        // Calculate animation duration and framerate from animator
+    // Calculate animation duration and framerate from animator. If recordUntilManualStop is enabled, we'll let recording continue until StopRecording is called,
+    // so set ratRecorder.recordingDuration accordingly.
         animationDuration = GetAnimationDuration();
         float frameRate = GetCurrentFrameRate();
         
         // Set up RatRecorder with animation parameters
-        ratRecorder.recordingDuration = animationDuration;
+        if (recordUntilManualStop)
+        {
+            // Use a very large duration so recording continues until StopRecording is called
+            ratRecorder.recordingDuration = float.MaxValue;
+        }
+        else
+        {
+            ratRecorder.recordingDuration = animationDuration;
+        }
         ratRecorder.captureFramerate = frameRate;
         ratRecorder.baseFilename = baseFilename;
         
@@ -1134,7 +1149,7 @@ public class Actor : MonoBehaviour
         Debug.Log($"  - Framerate: {data.framerate} FPS");
         Debug.Log($"  - Rendering mode: {renderingMode}");
         Debug.Log($"  - Texture: {data.textureFilename}");
-        Debug.Log($"  - All transforms and vertex animation are in RAT files");
+            Debug.Log($"  - All transforms (object motion) and vertex animation are baked into RAT files; .act contains static mesh data + RAT references");
     }
 
     /// <summary>
@@ -1189,6 +1204,16 @@ public class Actor : MonoBehaviour
         }
         
         StartTransformRecording();
+
+        // Also start any RatRecorder on this GameObject so vertex frames are captured
+        if (ratRecorder == null)
+            ratRecorder = GetComponent<RatRecorder>();
+        if (ratRecorder != null)
+        {
+            ratRecorder.captureFramerate = GetCurrentFrameRate();
+            ratRecorder.baseFilename = baseFilename;
+            ratRecorder.BeginRecording();
+        }
         
         Debug.Log($"Actor '{name}': Starting combined RAT and Actor recording...");
     }
@@ -1204,6 +1229,12 @@ public class Actor : MonoBehaviour
             return;
         }
         
+        // Stop RatRecorder first so RAT files are written
+        if (ratRecorder != null)
+        {
+            ratRecorder.EndRecording();
+        }
+
         StopTransformRecording();
     }
     

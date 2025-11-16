@@ -94,6 +94,7 @@ public class SDFParticleRecorder : MonoBehaviour
     
     // Storage for particle data per frame
     private List<ParticleFrameData> _recordedFrames = new List<ParticleFrameData>();
+    private List<Rat.ActorTransformFloat> _recordedTransforms = new List<Rat.ActorTransformFloat>();
     
     // SDF shape template (used to generate texture)
     private SDFShape _sdfShapeTemplate;
@@ -429,7 +430,8 @@ public class SDFParticleRecorder : MonoBehaviour
             return;
         }
 
-        _recordedFrames.Clear();
+    _recordedFrames.Clear();
+    _recordedTransforms.Clear();
         _recordingStartTime = Time.time;
         _lastCaptureTime = Time.time;
         _isRecording = true;
@@ -466,6 +468,7 @@ public class SDFParticleRecorder : MonoBehaviour
         }
 
         _recordedFrames.Add(frameData);
+    _recordedTransforms.Add(new Rat.ActorTransformFloat { position = transform.position, rotation = transform.eulerAngles, scale = transform.localScale, rat_file_index = 0, rat_local_frame = (uint)_recordedFrames.Count - 1 });
 
     }
 
@@ -638,18 +641,11 @@ public class SDFParticleRecorder : MonoBehaviour
         quadMesh.triangles = indices.Select(i => (int)i).ToArray();
         quadMesh.uv = uvs;
 
-        // Bake transforms into frame data
-        List<Rat.ActorTransformFloat> frameTransforms = new List<Rat.ActorTransformFloat>();
-        foreach (var frame in _recordedFrames)
+        // Bake transforms into frame data (per-frame transforms captured during recording)
+        List<Rat.ActorTransformFloat> frameTransforms = new List<Rat.ActorTransformFloat>(_recordedTransforms);
+        if (frameTransforms.Count != frameVertices.Count)
         {
-            frameTransforms.Add(new Rat.ActorTransformFloat
-            {
-                position = transform.position,
-                rotation = transform.eulerAngles,
-                scale = transform.localScale,
-                rat_file_index = 0,
-                rat_local_frame = (uint)frameTransforms.Count
-            });
+            UnityEngine.Debug.LogWarning($"SDFParticleRecorder: Frame count ({frameVertices.Count}) does not match recorded transforms ({frameTransforms.Count}).");
         }
 
         try

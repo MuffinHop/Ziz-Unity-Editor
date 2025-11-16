@@ -252,6 +252,11 @@ public class ActorEditor : Editor
         }
         
         // File Management Section
+        // Manual Stop Option Info
+        if (actor.recordUntilManualStop)
+        {
+            EditorGUILayout.HelpBox("Recording is set to continue until manually stopped. Actor transform motion beyond animation clip will be recorded.", MessageType.Info);
+        }
         EditorGUILayout.Space();
         EditorGUILayout.LabelField("File Management", EditorStyles.boldLabel);
         

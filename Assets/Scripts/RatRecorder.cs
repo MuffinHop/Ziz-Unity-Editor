@@ -75,6 +75,7 @@ public class RatRecorder : MonoBehaviour
     private float _recordingStartTime;
     private float _lastCaptureTime;
     private List<Vector3[]> _recordedFrames;
+    private List<Rat.ActorTransformFloat> _recordedTransforms; // per-frame triples
     private Vector2[] _capturedUVs; // Static UV data captured once
     private Color[] _capturedColors; // Static color data captured once
     private Mesh _tempMesh;
@@ -137,7 +138,8 @@ public class RatRecorder : MonoBehaviour
             enabled = false;
             return;
         }
-        _recordedFrames = new List<Vector3[]>();
+    _recordedFrames = new List<Vector3[]>();
+    _recordedTransforms = new List<Rat.ActorTransformFloat>();
         
         // Validate mesh compatibility with RAT format before starting
         if (!ValidateMeshCompatibility())
@@ -187,7 +189,7 @@ public class RatRecorder : MonoBehaviour
     /// <summary>
     /// Starts the recording process.
     /// </summary>
-    private void StartRecording()
+    public void StartRecording()
     {
         _recordedFrames.Clear();
         _recordingStartTime = Time.time;
@@ -198,6 +200,14 @@ public class RatRecorder : MonoBehaviour
         CaptureStaticMeshData();
         
         Debug.Log($"Recording started at {captureFramerate} FPS...");
+    }
+
+    /// <summary>
+    /// Public alias to StartRecording() for external callers.
+    /// </summary>
+    public void BeginRecording()
+    {
+        StartRecording();
     }
 
     /// <summary>
@@ -320,41 +330,53 @@ public class RatRecorder : MonoBehaviour
             }
             
             _recordedFrames.Add(scaledVertices);
+            // Capture the transform at the time of this frame so ExportAnimation can bake it into vertices
+            _recordedTransforms.Add(new Rat.ActorTransformFloat
+            {
+                position = transform.position,
+                rotation = transform.eulerAngles,
+                scale = transform.localScale,
+                rat_file_index = 0,
+                rat_local_frame = (uint)(_recordedFrames.Count - 1)
+            });
         }
         else if (frameVertices != null)
         {
-            // Convert to deltas from model center even without scaling
-            Vector3[] deltaVertices = new Vector3[frameVertices.Length];
-            for (int i = 0; i < frameVertices.Length; i++)
-            {
-                deltaVertices[i] = frameVertices[i] - _modelCenter;
-            }
-            
-            // Debug: Log delta vertex range for first frame
+            // Store full local-space vertices (no scaling requested)
+            // Debug: Log vertex range for first frame
             if (_recordedFrames.Count == 0)
             {
-                var minDelta = deltaVertices[0];
-                var maxDelta = deltaVertices[0];
-                foreach (var v in deltaVertices)
+                var minV = frameVertices[0];
+                var maxV = frameVertices[0];
+                foreach (var v in frameVertices)
                 {
-                    if (v.x < minDelta.x) minDelta.x = v.x;
-                    if (v.y < minDelta.y) minDelta.y = v.y;
-                    if (v.z < minDelta.z) minDelta.z = v.z;
-                    if (v.x > maxDelta.x) maxDelta.x = v.x;
-                    if (v.y > maxDelta.y) maxDelta.y = v.y;
-                    if (v.z > maxDelta.z) maxDelta.z = v.z;
+                    if (v.x < minV.x) minV.x = v.x;
+                    if (v.y < minV.y) minV.y = v.y;
+                    if (v.z < minV.z) minV.z = v.z;
+                    if (v.x > maxV.x) maxV.x = v.x;
+                    if (v.y > maxV.y) maxV.y = v.y;
+                    if (v.z > maxV.z) maxV.z = v.z;
                 }
-                Debug.Log($"Delta vertex bounds (from center {_modelCenter}): Min({minDelta.x:F3}, {minDelta.y:F3}, {minDelta.z:F3}) Max({maxDelta.x:F3}, {maxDelta.y:F3}, {maxDelta.z:F3})");
+                Debug.Log($"Vertex bounds: Min({minV.x:F3}, {minV.y:F3}, {minV.z:F3}) Max({maxV.x:F3}, {maxV.y:F3}, {maxV.z:F3})");
             }
-            
-            _recordedFrames.Add(deltaVertices);
+
+            _recordedFrames.Add(frameVertices);
+            // Capture the transform at the time of this frame so ExportAnimation can bake it into vertices
+            _recordedTransforms.Add(new Rat.ActorTransformFloat
+            {
+                position = transform.position,
+                rotation = transform.eulerAngles,
+                scale = transform.localScale,
+                rat_file_index = 0,
+                rat_local_frame = (uint)(_recordedFrames.Count - 1)
+            });
         }
     }
 
     /// <summary>
     /// Stops recording (but doesn't save - saving happens when exiting play mode).
     /// </summary>
-    private void StopRecording()
+    public void StopRecording()
     {
         _isRecording = false;
         _recordingComplete = true;
@@ -365,7 +387,26 @@ public class RatRecorder : MonoBehaviour
             return;
         }
 
-        Debug.Log($"Recording stopped. Captured {_recordedFrames.Count} frames at {recordingScale}x scale. Files will be saved when exiting play mode.");
+        Debug.Log($"Recording stopped. Captured {_recordedFrames.Count} frames at {recordingScale}x scale.");
+
+        // Save the recording immediately (not only on exiting play mode) so callers can sync RAT/ACT
+        try
+        {
+            SaveRecording();
+            _recordingComplete = false;
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogWarning($"RatRecorder: Immediate save failed - will try again on exit: {e.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Public alias to StopRecording() for external callers.
+    /// </summary>
+    public void EndRecording()
+    {
+        StopRecording();
     }
 
     /// <summary>
@@ -380,30 +421,13 @@ public class RatRecorder : MonoBehaviour
 
         try
         {
-            // Store the model center as an offset that needs to be applied to each frame
-            List<UnityEngine.Vector3[]> framesToExport = new List<UnityEngine.Vector3[]>();
-            List<Rat.ActorTransformFloat> frameTransforms = new List<Rat.ActorTransformFloat>();
-            
-            for (int i = 0; i < _recordedFrames.Count; i++)
+            // Export recorded local-space frames and the per-frame transforms
+            List<UnityEngine.Vector3[]> framesToExport = new List<UnityEngine.Vector3[]>(_recordedFrames);
+            List<Rat.ActorTransformFloat> frameTransforms = new List<Rat.ActorTransformFloat>(_recordedTransforms);
+
+            if (framesToExport.Count != frameTransforms.Count)
             {
-                // Each frame already has vertices relative to model center (delta vertices)
-                // We need to convert them back to world space by adding the model center
-                Vector3[] worldSpaceVertices = new Vector3[_recordedFrames[i].Length];
-                for (int v = 0; v < _recordedFrames[i].Length; v++)
-                {
-                    worldSpaceVertices[v] = _recordedFrames[i][v] + _modelCenter;
-                }
-                framesToExport.Add(worldSpaceVertices);
-                
-                // Store identity transform (animation is in vertices now)
-                frameTransforms.Add(new Rat.ActorTransformFloat
-                {
-                    position = Vector3.zero,
-                    rotation = Vector3.zero,
-                    scale = Vector3.one,
-                    rat_file_index = 0,
-                    rat_local_frame = (uint)i
-                });
+                UnityEngine.Debug.LogWarning($"RatRecorder: Frame count ({framesToExport.Count}) does not match transform count ({frameTransforms.Count}). ExportAnimation expects them to be equal. Will proceed with available transforms.");
             }
             
             Rat.Tool.ExportAnimation(
@@ -420,13 +444,34 @@ public class RatRecorder : MonoBehaviour
             );
             
             Debug.Log($"RatRecorder: Export complete - all transforms baked into vertices");
+
+            // If this GameObject has an Actor component, update its RAT file references
+            try
+            {
+                var genPath = System.IO.Path.Combine(Application.dataPath.Replace("Assets", ""), "GeneratedData");
+                var files = new List<string>(System.IO.Directory.GetFiles(genPath, baseFilename + "*.rat"));
+                for (int i = 0; i < files.Count; i++)
+                    files[i] = System.IO.Path.GetFileName(files[i]);
+
+                var actor = GetComponent<Actor>();
+                if (actor != null && files.Count > 0)
+                {
+                    UnityEngine.Debug.Log($"RatRecorder: Updating Actor '{name}' RAT references ({files.Count} files)");
+                    actor.SetRatFileReferences(files, new List<uint>());
+                }
+            }
+            catch (System.Exception e)
+            {
+                UnityEngine.Debug.LogWarning($"RatRecorder: Could not update Actor RAT references automatically: {e.Message}");
+            }
         }
         catch (System.Exception e)
         {
             Debug.LogError($"RatRecorder: Export failed - {e.Message}");
         }
 
-        _recordedFrames.Clear();
+    _recordedFrames.Clear();
+    _recordedTransforms.Clear();
     }
 
     /// <summary>
