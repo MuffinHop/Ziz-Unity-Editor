@@ -975,6 +975,7 @@ namespace Rat
         /// 
     /// Flow: apply transforms to frames, compress vertex deltas, write RAT/ACT files.
     /// - Transforms are applied to vertices to produce world-space frames
+    /// - If `customTransforms` are provided, they must be specified in world-space: position (world), rotation (world Euler angles in degrees), and scale as world-space (transform.lossyScale)
     /// - Compression uses computed bounds and 8-bit quantization per axis
     /// - RAT files contain bounds, quantized vertices, and delta streams
     /// - ACT files contain mesh data and RAT references (no per-frame transforms)
