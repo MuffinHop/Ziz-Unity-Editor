@@ -1,0 +1,128 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!21 &2100000
+Material:
+  serializedVersion: 8
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: MatCapMat
+  m_Shader: {fileID: 4800000, guid: 893d2b12d5b824ec58ce3acb5b943bc0, type: 3}
+  m_Parent: {fileID: 0}
+  m_ModifiedSerializedProperties: 0
+  m_ValidKeywords: []
+  m_InvalidKeywords: []
+  m_LightmapFlags: 4
+  m_EnableInstancingVariants: 0
+  m_DoubleSidedGI: 0
+  m_CustomRenderQueue: -1
+  stringTagMap: {}
+  disabledShaderPasses: []
+  m_LockedProperties: 
+  m_SavedProperties:
+    serializedVersion: 3
+    m_TexEnvs:
+    - _BumpMap:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _DetailAlbedoMap:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _DetailMask:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _DetailNormalMap:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _EmissionMap:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _EnvCube:
+        m_Texture: {fileID: 8900000, guid: a3de28b69b48944438c87668bd722ae7, type: 3}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _HeightMap:
+        m_Texture: {fileID: 2800000, guid: 24714280828ad49b2802d7080b447f78, type: 3}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _MainTex:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _MetallicGlossMap:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _OcclusionMap:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _ParallaxMap:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    m_Ints: []
+    m_Floats:
+    - _BumpScale: 1
+    - _Cutoff: 0.5
+    - _DetailNormalMapScale: 1
+    - _DiffuseIBLIntensity: 1
+    - _DirectionalIntensity: 2.37
+    - _DstBlend: 0
+    - _EnvMipScale: 8
+    - _Exposure: 1.5
+    - _FresnelPower: 1
+    - _FresnelTintEnd: 1
+    - _FresnelTintStart: 0
+    - _FresnelTintStrength: 0.5
+    - _GamutClamp: 1
+    - _GlossMapScale: 1
+    - _Glossiness: 0.5
+    - _GlossyReflections: 1
+    - _HeightScale: 0.585
+    - _IBLIntensity: 1
+    - _IOR: 1.378
+    - _Metallic: 0.724
+    - _Mode: 0
+    - _NumBounces: 1
+    - _NumSamples: 1
+    - _OcclusionStrength: 1
+    - _Parallax: 0.02
+    - _PointIntensity: 11.58
+    - _Roughness: 0.531
+    - _SSSScale: 0.5
+    - _SSSStrength: 0
+    - _SmoothnessTextureChannel: 0
+    - _SpecularHighlights: 1
+    - _SpecularIBLIntensity: 1
+    - _SpecularRoughnessFalloff: 0.5
+    - _SpecularTint: 0.083
+    - _SrcBlend: 1
+    - _Subsurface: 0.5
+    - _Transparency: 0
+    - _UVSec: 0
+    - _UseACES: 0
+    - _UseFresnel: 1
+    - _UseIBL: 1
+    - _ZWrite: 1
+    m_Colors:
+    - _BaseColor: {r: 1, g: 1, b: 1, a: 1}
+    - _Color: {r: 1, g: 1, b: 1, a: 1}
+    - _EmissionColor: {r: 0, g: 0, b: 0, a: 1}
+    - _Emissive: {r: 0, g: 0, b: 0, a: 1}
+    - _FresnelChannelMask: {r: 1, g: 1, b: 1, a: 0}
+    - _FresnelTint: {r: 1, g: 1, b: 1, a: 1}
+    - _LightColor: {r: 1, g: 1, b: 1, a: 1}
+    - _LightDir: {r: 0.577, g: 2.57, b: -1.36, a: 0}
+    - _PointLightColor: {r: 1, g: 1, b: 1, a: 1}
+    - _PointLightPos: {r: 2, g: 2, b: 2, a: 0}
+    - _SSSColor: {r: 1, g: 0.8, b: 0.7, a: 1}
+    - _SkyColorHorizon: {r: 0.18867922, g: 0.17710927, b: 0.17710927, a: 1}
+    - _SkyColorTop: {r: 0.81247777, g: 0.87203145, b: 0.9622642, a: 1}
+  m_BuildTextureStacks: []
