@@ -102,6 +102,10 @@ public class Actor : MonoBehaviour
     private string textureFilename = ""; // Auto-generated texture filename (serialized so editor changes persist)
 
     // Non-serialized fields
+    // Note: recorded transform fields (position, rotation, scale) are stored in world space.
+    // - position: world position (transform.position)
+    // - rotation: world Euler angles (transform.eulerAngles)
+    // - scale: effective world scale (transform.lossyScale)
     private long currentKeyFrame;
     private MeshRenderer meshRenderer;
     private SkinnedMeshRenderer skinnedMeshRenderer;

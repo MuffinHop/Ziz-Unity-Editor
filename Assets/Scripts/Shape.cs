@@ -54,6 +54,7 @@ public abstract class Shape : MonoBehaviour
     {
         public Vector3 position;
         public Vector3 rotation; // Euler angles
+        // Effective world-space scale (transform.lossyScale) recorded from the transform
         public Vector3 scale;
     }
 

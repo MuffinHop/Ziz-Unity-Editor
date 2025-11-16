@@ -620,6 +620,7 @@ public class SDFShape : MonoBehaviour
     {
         public Vector3 position;
         public Quaternion rotation;
+        // Effective world-space scale for this transform (transform.lossyScale)
         public Vector3 scale;
         public float time; // new: record Time.time for resampling
     }

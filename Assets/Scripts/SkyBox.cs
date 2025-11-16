@@ -47,6 +47,7 @@ namespace ZizSceneEditor.Assets.Scripts.Shapes
         {
             public Vector3 position;
             public Vector3 rotation; // Euler angles
+            // Effective world-space scale recorded as lossyscale
             public Vector3 scale;
         }
 

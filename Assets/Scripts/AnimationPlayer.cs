@@ -498,7 +498,7 @@ public class AnimationPlayer : MonoBehaviour
         
         // Draw bounds
         Gizmos.color = Color.yellow;
-        Gizmos.DrawWireCube(transform.TransformPoint(_mesh.bounds.center), 
-                           Vector3.Scale(_mesh.bounds.size, transform.localScale));
+    Gizmos.DrawWireCube(transform.TransformPoint(_mesh.bounds.center), 
+               Vector3.Scale(_mesh.bounds.size, transform.lossyScale));
     }
 }

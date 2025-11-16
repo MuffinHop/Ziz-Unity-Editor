@@ -1189,7 +1189,8 @@ namespace Rat
     {
         public UnityEngine.Vector3 position;        // World position (represents model center)
         public UnityEngine.Vector3 rotation;        // World rotation (Euler angles in degrees)
-        public UnityEngine.Vector3 scale;           // World scale
+    // World scale - this stores the effective world-space scale (transform.lossyScale) as recorded.
+    public UnityEngine.Vector3 scale;           // World scale (lossyScale)
         public uint rat_file_index;     // Index into the RAT file list (0-based)
         public uint rat_local_frame;    // Frame index within the specific RAT file
     }
