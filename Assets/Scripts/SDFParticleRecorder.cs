@@ -85,6 +85,9 @@ public class SDFParticleRecorder : MonoBehaviour
     [Tooltip("Automatically export when exiting play mode.")]
     public bool autoExportOnPlayModeExit = true;
 
+    [Tooltip("If true, exports .act and .rat files. If false, only records in memory.")]
+    public bool exportBinary = true;
+
     // Private fields
     private bool _isRecording = false;
     private float _recordingStartTime;
@@ -618,6 +621,12 @@ public class SDFParticleRecorder : MonoBehaviour
             return;
         }
 
+        if (!exportBinary)
+        {
+            Debug.Log("SDFParticleRecorder - exportBinary is false, skipping export.");
+            return;
+        }
+
         // Export the recorded data
         ExportToActAndRat();
     }
@@ -930,7 +939,7 @@ public class SDFParticleRecorder : MonoBehaviour
             }
 
             // Verify the export immediately
-            VerifyExport(ratFiles, frameVertices, minBounds, maxBounds);
+            //VerifyExport(ratFiles, frameVertices, minBounds, maxBounds);
         }
         catch (System.Exception e)
         {

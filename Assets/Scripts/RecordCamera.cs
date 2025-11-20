@@ -27,6 +27,7 @@ public class RecordCamera : MonoBehaviour
     [Header("Recording Settings")]
     public string fileName = "camera_track";
     public float recordingFPS = 30f; // Target recording frame rate
+    public bool exportBinary = true; // If true, exports .cam file. If false, only records in memory.
 
     // export options for coordinate conventions
     [Tooltip("Flip Z axis on export (Unity -> right-handed)")]
@@ -199,6 +200,12 @@ public class RecordCamera : MonoBehaviour
     
     void SaveCameraFile()
     {
+        if (!exportBinary)
+        {
+            Debug.Log("RecordCamera - exportBinary is false, skipping export.");
+            return;
+        }
+
         if (floatKeyframes.Count == 0)
         {
             Debug.LogWarning("No camera data to save");

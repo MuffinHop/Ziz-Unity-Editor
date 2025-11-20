@@ -70,6 +70,9 @@ public class RatRecorder : MonoBehaviour
     [Tooltip("Preserve the first frame of the animation in its raw, uncompressed format.")]
     public bool preserveFirstFrame = false;
 
+    [Tooltip("If true, exports .rat files. If false, only records in memory.")]
+    public bool exportBinary = true;
+
     private bool _isRecording = false;
     private bool _recordingComplete = false; // Track if recording finished (but not yet saved)
     private float _recordingStartTime;
@@ -97,8 +100,13 @@ public class RatRecorder : MonoBehaviour
     {
         if (state == PlayModeStateChange.ExitingPlayMode && _recordingComplete)
         {
+            if (!exportBinary)
+            {
+                Debug.Log("RatRecorder - exportBinary is false, skipping export.");
+                return;
+            }
             // Save the recording when exiting play mode
-            SaveRecording(true); // skip validation to avoid blocking the editor while changing play mode
+            SaveRecording(true);
         }
     }
 #endif

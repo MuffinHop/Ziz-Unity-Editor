@@ -77,6 +77,7 @@ public class Actor : MonoBehaviour
     public bool record = false;
     [Tooltip("If true, recording continues until StopRecording is called, even if the animation clip is shorter.")]
     public bool recordUntilManualStop = false;
+    public bool exportBinary = true; // If true, exports .act and .rat files. If false, only records in memory.
 
     [Header("Material & Rendering Settings")]
     [Tooltip("Choose the material and lighting mode for this actor")]
@@ -858,6 +859,8 @@ public class Actor : MonoBehaviour
             else if (meshRenderer != null)
                 ratRecorder.targetMeshFilter = GetComponent<MeshFilter>();
         }
+        
+        ratRecorder.exportBinary = exportBinary;
         
     // Calculate animation duration and framerate from animator. If recordUntilManualStop is enabled, we'll let recording continue until StopRecording is called,
     // so set ratRecorder.recordingDuration accordingly.

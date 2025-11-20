@@ -148,6 +148,7 @@ public class SceneController : MonoBehaviour
     public string sceneName = "scene";
     public float recordingFPS = 30f;
     public bool logStateChanges = false; // If true, only records when a component's state changes
+    public bool exportBinaries = true; // If true, exports .scn, .act, .rat, .cam files. If false, only records in memory (or not at all).
 
     [Header("Debug Info")]
     [SerializeField] private bool isRecording = false;
@@ -238,6 +239,27 @@ public class SceneController : MonoBehaviour
     [ContextMenu("Start Recording")]
     public void StartRecording()
     {
+        // Clear GeneratedData folder
+        string generatedDataPath = Path.Combine(Application.dataPath, "..", "GeneratedData");
+        try
+        {
+            if (Directory.Exists(generatedDataPath))
+            {
+                DirectoryInfo di = new DirectoryInfo(generatedDataPath);
+                foreach (FileInfo file in di.GetFiles()) file.Delete();
+                foreach (DirectoryInfo dir in di.GetDirectories()) dir.Delete(true);
+                Debug.Log("Cleared GeneratedData folder.");
+            }
+            else
+            {
+                Directory.CreateDirectory(generatedDataPath);
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"Failed to clear GeneratedData folder: {e.Message}");
+        }
+
         FileLogger.Initialize();
         
         if (isRecording)
@@ -273,7 +295,7 @@ public class SceneController : MonoBehaviour
         // One final record to capture the end state
         RecordCurrentFrame();
 
-        if (keyframes.Count > 0)
+        if (keyframes.Count > 0 && exportBinaries)
         {
             SaveSceneFile();
         }
@@ -326,6 +348,7 @@ public class SceneController : MonoBehaviour
         RecordCamera[] cameras = FindObjectsOfType<RecordCamera>();
         foreach (var cam in cameras)
         {
+            cam.exportBinary = exportBinaries;
             trackedComponents.Add(new TrackedComponent(cam, cam.fileName, cam.fileName + ".cam", ComponentType.Camera, currentId++));
         }
 
@@ -333,6 +356,8 @@ public class SceneController : MonoBehaviour
         Actor[] actors = FindObjectsOfType<Actor>();
         foreach (var actor in actors)
         {
+            actor.exportBinary = exportBinaries;
+
             // Actors reference .act files (which contain transform and RAT file references)
             string actPath = actor.BaseFilename + ".act";
             trackedComponents.Add(new TrackedComponent(actor, actor.gameObject.name, actPath, ComponentType.Actor, currentId++));
@@ -386,6 +411,7 @@ public class SceneController : MonoBehaviour
         SDFParticleRecorder[] particleRecorders = FindObjectsOfType<SDFParticleRecorder>();
         foreach (var recorder in particleRecorders)
         {
+            recorder.exportBinary = exportBinaries;
             // Particle systems reference their base filename .act files
             string actPath = $"{recorder.baseFilename}.act";
             trackedComponents.Add(new TrackedComponent(recorder, recorder.gameObject.name, actPath, ComponentType.Actor, currentId++));
