@@ -80,7 +80,7 @@ public class SDFParticleRecorder : MonoBehaviour
 
     [Tooltip("Maximum file size in KB before splitting into multiple parts.")]
     [Range(16, 1024)]
-    public int maxFileSizeKB = 512;
+    public int maxFileSizeKB = 64;
 
     [Tooltip("Automatically export when exiting play mode.")]
     public bool autoExportOnPlayModeExit = true;
