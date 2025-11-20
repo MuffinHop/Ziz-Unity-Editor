@@ -73,6 +73,8 @@ public class RatRecorder : MonoBehaviour
     [Tooltip("If true, exports .rat files. If false, only records in memory.")]
     public bool exportBinary = true;
 
+    public bool IsRecording => _isRecording;
+
     private bool _isRecording = false;
     private bool _recordingComplete = false; // Track if recording finished (but not yet saved)
     private float _recordingStartTime;
@@ -171,7 +173,12 @@ public class RatRecorder : MonoBehaviour
     /// </summary>
     void Update()
     {
-        if (_isRecording && Time.time - _recordingStartTime >= recordingDuration)
+        // Only auto-stop if we are running in standalone mode (not controlled by Actor)
+        // If controlled by Actor, Actor will call StopRecording() when it's done.
+        // We detect standalone mode by checking if we have an Actor component on the same GameObject.
+        bool hasActor = GetComponent<Actor>() != null;
+        
+        if (!hasActor && _isRecording && Time.time - _recordingStartTime >= recordingDuration)
         {
             StopRecording();
         }
@@ -231,15 +238,6 @@ public class RatRecorder : MonoBehaviour
             targetSkinnedMeshRenderer.BakeMesh(_tempMesh);
             frameVertices = _tempMesh.vertices;
             
-            // Convert vertices from Unity left-handed to right-handed coordinates
-            if (frameVertices != null)
-            {
-                for (int i = 0; i < frameVertices.Length; i++)
-                {
-                    frameVertices[i] = new Vector3(frameVertices[i].x, frameVertices[i].y, -frameVertices[i].z);
-                }
-            }
-            
             // Debug: Check if the baked mesh has valid triangle data (only for first frame to avoid spam)
             if (_recordedFrames.Count == 0)
             {
@@ -275,15 +273,6 @@ public class RatRecorder : MonoBehaviour
         {
             // For regular meshes, we can just grab the vertices directly.
             frameVertices = targetMeshFilter.mesh.vertices;
-        }
-        
-        // Convert vertices from Unity left-handed to right-handed coordinates
-        if (frameVertices != null)
-        {
-            for (int i = 0; i < frameVertices.Length; i++)
-            {
-                frameVertices[i] = new Vector3(frameVertices[i].x, frameVertices[i].y, -frameVertices[i].z);
-            }
         }
         
         // Debug: Log capture information for first few frames

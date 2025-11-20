@@ -222,12 +222,12 @@ public class ActorEditor : Editor
         EditorGUILayout.Space();
         EditorGUILayout.LabelField("Recording Status", EditorStyles.boldLabel);
         
-        // Recording automatically starts in Play Mode when an Animator is present
+        // Recording automatically starts in Play Mode
         if (Application.isPlaying)
         {
             if (actor.IsRecording)
             {
-                EditorGUILayout.HelpBox("Recording both RAT and Actor data automatically...\nFiles will be saved when exiting Play Mode", MessageType.Info);
+                EditorGUILayout.HelpBox("Recording vertex positions every frame...\nCapturing world coordinates with animations and transforms applied.\nFiles will be saved when exiting Play Mode", MessageType.Info);
                 EditorGUILayout.LabelField($"Saving to: GeneratedData/{actor.BaseFilename}.rat & GeneratedData/{actor.BaseFilename}.act");
                 
                 if (GUILayout.Button("Stop Recording Now"))
@@ -235,19 +235,19 @@ public class ActorEditor : Editor
                     actor.StopRecording();
                 }
             }
-            else if (actor.Animator != null)
+            else if (actor.HasValidRenderer)
             {
-                EditorGUILayout.HelpBox("Recording starts automatically when animation begins\nFiles are saved on exiting Play Mode", MessageType.Info);
+                EditorGUILayout.HelpBox("Recording vertex positions automatically every frame\nFiles are saved on exiting Play Mode", MessageType.Info);
                 EditorGUILayout.LabelField($"Will save to: GeneratedData/{actor.BaseFilename}.rat & GeneratedData/{actor.BaseFilename}.act");
             }
             else
             {
-                EditorGUILayout.HelpBox("No Animator found - recording cannot start", MessageType.Warning);
+                EditorGUILayout.HelpBox("No valid renderer found - recording cannot start", MessageType.Warning);
             }
         }
         else
         {
-            EditorGUILayout.HelpBox("Enter Play Mode to automatically start recording\nFiles will be saved automatically when exiting Play Mode", MessageType.Info);
+            EditorGUILayout.HelpBox("Enter Play Mode to automatically start recording vertex positions\nAll frames will be captured with animations and transforms applied\nFiles will be saved automatically when exiting Play Mode", MessageType.Info);
             EditorGUILayout.LabelField($"Will save to: GeneratedData/{actor.BaseFilename}.rat & GeneratedData/{actor.BaseFilename}.act");
         }
         
@@ -255,7 +255,7 @@ public class ActorEditor : Editor
         // Manual Stop Option Info
         if (actor.recordUntilManualStop)
         {
-            EditorGUILayout.HelpBox("Recording is set to continue until manually stopped. Actor transform motion beyond animation clip will be recorded.", MessageType.Info);
+            EditorGUILayout.HelpBox("Recording continues for entire play session. All vertex positions are captured every frame until you exit Play Mode or manually stop.", MessageType.Info);
         }
         EditorGUILayout.Space();
         EditorGUILayout.LabelField("File Management", EditorStyles.boldLabel);

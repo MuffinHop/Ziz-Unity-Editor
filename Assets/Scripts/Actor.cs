@@ -76,7 +76,7 @@ public class Actor : MonoBehaviour
     [Header("Recording Settings")]
     public bool record = false;
     [Tooltip("If true, recording continues until StopRecording is called, even if the animation clip is shorter.")]
-    public bool recordUntilManualStop = false;
+    public bool recordUntilManualStop = true;
     public bool exportBinary = true; // If true, exports .act and .rat files. If false, only records in memory.
 
     [Header("Material & Rendering Settings")]
@@ -109,6 +109,10 @@ public class Actor : MonoBehaviour
     private uint recordedFrameCount;
     private float animationDuration = 0f;  // Total duration of the animation
     private RatRecorder ratRecorder;
+    
+    // Per-frame vertex capture
+    private List<Vector3[]> capturedVertexFrames = new List<Vector3[]>();
+    private Mesh workingMesh;  // Cache for accessing vertex data
 
     // Getters
     public Vector3 Position => position;
@@ -144,6 +148,12 @@ public class Actor : MonoBehaviour
         // Auto-generate filenames based on transform name
         UpdateFilenamesFromTransform();
         lastTransformName = transform.name;
+        
+        // Initialize working mesh cache
+        if (skinnedMeshRenderer != null && skinnedMeshRenderer.sharedMesh != null)
+        {
+            workingMesh = new Mesh();
+        }
     }
     
     /// <summary>
@@ -642,21 +652,16 @@ public class Actor : MonoBehaviour
         // Update current keyframe based on animator state
         UpdateCurrentKeyFrame();
         
-        // Always start recording transforms when in play mode and animator is available
-        if (!isRecording && Application.isPlaying && animator != null)
+        // Start recording when entering play mode
+        if (!isRecording && Application.isPlaying && HasValidRenderer)
         {
-            StartTransformRecording();
+            StartVertexRecording();
         }
         
         if (isRecording)
         {
-            RecordCurrentTransform();
-            
-            // Stop recording after duration
-            if (Time.time - recordingStartTime >= animationDuration)
-            {
-                StopTransformRecording();
-            }
+            CaptureCurrentFrame();
+            recordedFrameCount++;
         }
     }
     
@@ -665,16 +670,16 @@ public class Actor : MonoBehaviour
         // Save files when application is paused (which includes exiting play mode)
         if (pauseStatus && isRecording)
         {
-            StopTransformRecording();
+            StopVertexRecording();
         }
     }
     
     private void OnDestroy()
     {
         // Save files when component is destroyed (including when exiting play mode)
-        if (isRecording && AnimationData != null && AnimationData.ratFilePaths.Count > 0)
+        if (isRecording && capturedVertexFrames.Count > 0)
         {
-            StopTransformRecording();
+            StopVertexRecording();
         }
     }
     
@@ -807,6 +812,12 @@ public class Actor : MonoBehaviour
     /// </summary>
     public float GetAnimationDuration(int layerIndex = 0)
     {
+        // Return recorded duration instead of animator clip duration
+        if (isRecording && recordingStartTime > 0)
+        {
+            return Time.time - recordingStartTime;
+        }
+        
         if (animator == null || animator.runtimeAnimatorController == null)
             return 5.0f; // Fallback duration
             
@@ -837,80 +848,211 @@ public class Actor : MonoBehaviour
     }
     
     /// <summary>
-    /// Starts recording transform data for each frame
+    /// Starts recording vertex positions every frame
     /// </summary>
-    private void StartTransformRecording()
+    private void StartVertexRecording()
     {
         if (isRecording) return;
         
-        // Update filenames based on current transform name (in case it changed)
+        // Update filenames based on current transform name
         UpdateFilenamesFromTransform();
         
-        // Get or create RatRecorder component
-        ratRecorder = GetComponent<RatRecorder>();
-        if (ratRecorder == null)
-        {
-            Debug.LogWarning($"Actor {name} - no RatRecorder found; adding one now.");
-            ratRecorder = gameObject.AddComponent<RatRecorder>();
-            
-            // Configure RatRecorder with animation settings
-            if (skinnedMeshRenderer != null)
-                ratRecorder.targetSkinnedMeshRenderer = skinnedMeshRenderer;
-            else if (meshRenderer != null)
-                ratRecorder.targetMeshFilter = GetComponent<MeshFilter>();
-        }
-        
-        ratRecorder.exportBinary = exportBinary;
-        
-    // Calculate animation duration and framerate from animator. If recordUntilManualStop is enabled, we'll let recording continue until StopRecording is called,
-    // so set ratRecorder.recordingDuration accordingly.
-        animationDuration = GetAnimationDuration();
-        float frameRate = GetCurrentFrameRate();
-        
-        // Set up RatRecorder with animation parameters
-        if (recordUntilManualStop)
-        {
-            // Use a very large duration so recording continues until StopRecording is called
-            ratRecorder.recordingDuration = float.MaxValue;
-        }
-        else
-        {
-            ratRecorder.recordingDuration = animationDuration;
-        }
-        ratRecorder.captureFramerate = frameRate;
-        ratRecorder.baseFilename = baseFilename;
-        
-        // Try to get model center from RatRecorder (no longer stored, but used for validation)
-        Vector3 ratModelCenter = ratRecorder.GetModelCenter();
-    Debug.Log($"Actor {name} - RAT model center: {ratModelCenter}");
-        
-        // Initialize animation data
-        AnimationData = new ActorAnimationData();
-        AnimationData.ratFilePaths = new List<string> { ratFilePath };
-        AnimationData.framerate = frameRate;
+        // Clear any previous capture data
+        capturedVertexFrames.Clear();
         
         isRecording = true;
         recordingStartTime = Time.time;
         recordedFrameCount = 0;
         
-    Debug.Log($"Actor {name} - recording transforms at {AnimationData.framerate} FPS for {animationDuration}s");
-    Debug.Log($"Actor {name} - will save: {baseFilename}.rat, {baseFilename}.act");
-    Debug.Log($"Actor {name} - positions use model center for RAT deltas");
+        Debug.Log($"Actor {name} - started vertex recording (capturing world coordinates every frame)");
+    }
+    
+    /// <summary>
+    /// Captures the current frame's vertex positions in world space
+    /// </summary>
+    private void CaptureCurrentFrame()
+    {
+        Vector3[] worldVertices = null;
+        
+        if (skinnedMeshRenderer != null)
+        {
+            // For skinned mesh, bake the current pose into working mesh
+            skinnedMeshRenderer.BakeMesh(workingMesh);
+            
+            // Get vertices in local space
+            Vector3[] localVertices = workingMesh.vertices;
+            worldVertices = new Vector3[localVertices.Length];
+            
+            // Transform to world space
+            for (int i = 0; i < localVertices.Length; i++)
+            {
+                worldVertices[i] = transform.TransformPoint(localVertices[i]);
+            }
+        }
+        else if (meshRenderer != null)
+        {
+            MeshFilter meshFilter = GetComponent<MeshFilter>();
+            if (meshFilter != null && meshFilter.sharedMesh != null)
+            {
+                Vector3[] localVertices = meshFilter.sharedMesh.vertices;
+                worldVertices = new Vector3[localVertices.Length];
+                
+                // Transform to world space
+                for (int i = 0; i < localVertices.Length; i++)
+                {
+                    worldVertices[i] = transform.TransformPoint(localVertices[i]);
+                }
+            }
+        }
+        
+        if (worldVertices != null)
+        {
+            capturedVertexFrames.Add(worldVertices);
+        }
     }
     
     /// <summary>
     /// Stops recording and saves both RAT and Actor data to files
     /// </summary>
-    private void StopTransformRecording()
+    private void StopVertexRecording()
     {
         if (!isRecording) return;
         
         isRecording = false;
         
-        // Save both files together
-        SaveBothFiles();
+        float recordingDuration = Time.time - recordingStartTime;
         
-    Debug.Log($"Actor {name} - recorded {recordedFrameCount} transform keyframes");
+        // Use animator framerate if available, otherwise fall back to calculated framerate
+        float exportFramerate = 30f; // default fallback
+        
+        if (animator != null && animator.runtimeAnimatorController != null)
+        {
+            exportFramerate = GetCurrentAnimationFrameRate();
+            Debug.Log($"Actor {name} - using animator framerate: {exportFramerate:F1} FPS");
+        }
+        else
+        {
+            // Fallback: calculate from actual captured frames
+            float estimatedFramerate = recordedFrameCount / Mathf.Max(recordingDuration, 0.001f);
+            exportFramerate = estimatedFramerate;
+            Debug.Log($"Actor {name} - no animator found, using calculated framerate: {exportFramerate:F1} FPS");
+        }
+        
+        Debug.Log($"Actor {name} - recorded {recordedFrameCount} frames over {recordingDuration:F2}s");
+        Debug.Log($"Actor {name} - captured {capturedVertexFrames.Count} vertex frames");
+        
+        // Export to RAT and ACT files with animator framerate
+        ExportCapturedFrames(exportFramerate);
+    }
+    
+    /// <summary>
+    /// Exports captured vertex frames to RAT and ACT files
+    /// </summary>
+    private void ExportCapturedFrames(float framerate)
+    {
+        if (capturedVertexFrames.Count == 0)
+        {
+            Debug.LogWarning($"Actor {name} - no frames captured, skipping export");
+            return;
+        }
+        
+        // Get source mesh for UVs, colors, and indices
+        Mesh sourceMesh = null;
+        Vector2[] uvs = null;
+        Color[] colors = null;
+        
+        if (skinnedMeshRenderer != null && skinnedMeshRenderer.sharedMesh != null)
+        {
+            sourceMesh = skinnedMeshRenderer.sharedMesh;
+        }
+        else if (meshRenderer != null)
+        {
+            MeshFilter meshFilter = GetComponent<MeshFilter>();
+            if (meshFilter != null && meshFilter.sharedMesh != null)
+            {
+                sourceMesh = meshFilter.sharedMesh;
+            }
+        }
+        
+        if (sourceMesh == null)
+        {
+            Debug.LogError($"Actor {name} - cannot export: no source mesh found");
+            return;
+        }
+        
+        // Extract UVs and colors from source mesh
+        uvs = sourceMesh.uv.Length > 0 ? sourceMesh.uv : new Vector2[sourceMesh.vertexCount];
+        colors = sourceMesh.colors.Length > 0 ? sourceMesh.colors : Enumerable.Repeat(Color.white, sourceMesh.vertexCount).ToArray();
+        
+        Debug.Log($"Actor {name} - starting export of {capturedVertexFrames.Count} frames...");
+        
+        // Use synchronous export (yieldPerChunk: false doesn't invoke callback, so we don't use it)
+        // Instead, call ExportAnimation without callback and then manually update AnimationData
+        try
+        {
+            Rat.Tool.ExportAnimation(
+                baseFilename,
+                capturedVertexFrames,
+                sourceMesh,
+                uvs,
+                colors,
+                framerate,
+                textureFilename,
+                64,  // maxFileSizeKB
+                renderingMode,
+                customTransforms: null,  // Transforms already applied to vertices
+                flipZ: false,  // Already in world space
+                skipValidation: false,
+                yieldPerChunk: false,  // Synchronous export
+                onComplete: null  // Don't use callback for sync export
+            );
+            
+            // Manually determine created RAT files after export completes
+            string generatedDataPath = Path.Combine(Application.dataPath.Replace("Assets", ""), "GeneratedData");
+            var ratFiles = new List<string>();
+            
+            // Check for single file or multi-part files
+            string singleFile = Path.Combine(generatedDataPath, $"{baseFilename}.rat");
+            if (File.Exists(singleFile))
+            {
+                ratFiles.Add(Path.GetFileName(singleFile));
+            }
+            else
+            {
+                // Check for multi-part files
+                int partIndex = 1;
+                while (true)
+                {
+                    string partFile = Path.Combine(generatedDataPath, $"{baseFilename}_part{partIndex:D2}of*.rat");
+                    var matches = Directory.GetFiles(generatedDataPath, $"{baseFilename}_part{partIndex:D2}of*.rat");
+                    if (matches.Length == 0) break;
+                    
+                    foreach (var match in matches)
+                    {
+                        ratFiles.Add(Path.GetFileName(match));
+                    }
+                    partIndex++;
+                }
+            }
+            
+            Debug.Log($"Actor {name} - export complete: {ratFiles.Count} RAT file(s) created");
+            
+            // Update AnimationData with created files
+            AnimationData.ratFilePaths.Clear();
+            AnimationData.ratFilePaths.AddRange(ratFiles);
+            AnimationData.framerate = framerate;
+            AnimationData.meshUVs = uvs;
+            AnimationData.meshColors = colors;
+            AnimationData.meshIndices = sourceMesh.triangles;
+            AnimationData.textureFilename = textureFilename;
+            
+            // Now save the ACT file with the updated AnimationData
+            SaveBothFiles();
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Actor {name} - export failed: {e.Message}\n{e.StackTrace}");
+        }
     }
     
     /// <summary>
@@ -1194,25 +1336,9 @@ public class Actor : MonoBehaviour
             return;
         }
         
-        if (animator == null)
-        {
-            Debug.LogError($"Actor {name} - cannot start recording without an Animator");
-            return;
-        }
+        StartVertexRecording();
         
-        StartTransformRecording();
-
-        // Also start any RatRecorder on this GameObject so vertex frames are captured
-        if (ratRecorder == null)
-            ratRecorder = GetComponent<RatRecorder>();
-        if (ratRecorder != null)
-        {
-            ratRecorder.captureFramerate = GetCurrentFrameRate();
-            ratRecorder.baseFilename = baseFilename;
-            ratRecorder.BeginRecording();
-        }
-        
-    Debug.Log($"Actor {name} - starting combined RAT+ACT recording...");
+        Debug.Log($"Actor {name} - starting vertex frame recording...");
     }
     
     /// <summary>
@@ -1226,13 +1352,7 @@ public class Actor : MonoBehaviour
             return;
         }
         
-        // Stop RatRecorder first so RAT files are written
-        if (ratRecorder != null)
-        {
-            ratRecorder.EndRecording();
-        }
-
-        StopTransformRecording();
+        StopVertexRecording();
     }
     
     /// <summary>

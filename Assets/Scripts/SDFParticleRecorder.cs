@@ -668,16 +668,16 @@ public class SDFParticleRecorder : MonoBehaviour
             int vertexOffset = i * 4;
             int indexOffset = i * 6;
 
-            // Quad indices (two triangles, standard counter-clockwise winding)
-            // A quad is made of two triangles: (0, 2, 1) and (2, 3, 1)
+            // Quad indices (two triangles, CCW winding for OpenGL)
+            // A quad is made of two triangles: (0, 1, 2) and (2, 1, 3)
             // Vertex layout: 0=BL, 1=BR, 2=TL, 3=TR
             indices[indexOffset + 0] = (ushort)(vertexOffset + 0); // Triangle 1: V0 (BL)
-            indices[indexOffset + 1] = (ushort)(vertexOffset + 2); // Triangle 1: V2 (TL)
-            indices[indexOffset + 2] = (ushort)(vertexOffset + 1); // Triangle 1: V1 (BR)
+            indices[indexOffset + 1] = (ushort)(vertexOffset + 1); // Triangle 1: V1 (BR)
+            indices[indexOffset + 2] = (ushort)(vertexOffset + 2); // Triangle 1: V2 (TL)
 
             indices[indexOffset + 3] = (ushort)(vertexOffset + 2); // Triangle 2: V2 (TL)
-            indices[indexOffset + 4] = (ushort)(vertexOffset + 3); // Triangle 2: V3 (TR)
-            indices[indexOffset + 5] = (ushort)(vertexOffset + 1); // Triangle 2: V1 (BR)
+            indices[indexOffset + 4] = (ushort)(vertexOffset + 1); // Triangle 2: V1 (BR)
+            indices[indexOffset + 5] = (ushort)(vertexOffset + 3); // Triangle 2: V3 (TR)
 
             // Quad UVs (standard quad mapping)
             staticUVs[vertexOffset + 0] = new Vector2(0, 0); // Bottom-left
@@ -824,22 +824,13 @@ public class SDFParticleRecorder : MonoBehaviour
                     Vector3 final_v2 = worldPos + billboardMatrix.MultiplyVector(v2) * particle.scale.y;
                     Vector3 final_v3 = worldPos + billboardMatrix.MultiplyVector(v3) * particle.scale.y;
 
-                    // 5. Convert final world-space vertices to the particle system's local space for export
-                    if (simulationSpace == ParticleSystemSimulationSpace.World)
-                    {
-                        // If PS is in world space, the recorder's transform needs to be accounted for
-                        vertices[vertexOffset + 0] = transform.InverseTransformPoint(final_v0);
-                        vertices[vertexOffset + 1] = transform.InverseTransformPoint(final_v1);
-                        vertices[vertexOffset + 2] = transform.InverseTransformPoint(final_v2);
-                        vertices[vertexOffset + 3] = transform.InverseTransformPoint(final_v3);
-                    }
-                    else // Local or Custom space
-                    {
-                        vertices[vertexOffset + 0] = final_v0;
-                        vertices[vertexOffset + 1] = final_v1;
-                        vertices[vertexOffset + 2] = final_v2;
-                        vertices[vertexOffset + 3] = final_v3;
-                    }
+                    // 5. Use World Space vertices and flip Z for OpenGL
+                    // We ignore simulationSpace for export because the C engine expects baked World Space coordinates
+                    // We also flip Z to convert from Unity's Left-Handed system to OpenGL's Right-Handed system
+                    vertices[vertexOffset + 0] = new Vector3(final_v0.x, final_v0.y, -final_v0.z);
+                    vertices[vertexOffset + 1] = new Vector3(final_v1.x, final_v1.y, -final_v1.z);
+                    vertices[vertexOffset + 2] = new Vector3(final_v2.x, final_v2.y, -final_v2.z);
+                    vertices[vertexOffset + 3] = new Vector3(final_v3.x, final_v3.y, -final_v3.z);
                     
                     // Update bounds
                     minBounds = Vector3.Min(minBounds, vertices[vertexOffset + 0]);
