@@ -44,17 +44,17 @@ public class RatRecorder : MonoBehaviour
     [Tooltip("Maximum bits allowed for X-axis deltas. Lower values = better compression but less accuracy.\n" +
              "1 bit = ±0 (no movement), 2 bits = ±1, 3 bits = ±3, 4 bits = ±7, 5 bits = ±15, etc.")]
     [Range(1, 8)]
-    public int maxBitsX = 5;
+    public int maxBitsX = 8;
 
     [Tooltip("Maximum bits allowed for Y-axis deltas. Lower values = better compression but less accuracy.\n" +
              "1 bit = ±0 (no movement), 2 bits = ±1, 3 bits = ±3, 4 bits = ±7, 5 bits = ±15, etc.")]
     [Range(1, 8)]
-    public int maxBitsY = 5;
+    public int maxBitsY = 8;
 
     [Tooltip("Maximum bits allowed for Z-axis deltas. Lower values = better compression but less accuracy.\n" +
              "1 bit = ±0 (no movement), 2 bits = ±1, 3 bits = ±3, 4 bits = ±7, 5 bits = ±15, etc.")]
     [Range(1, 8)]
-    public int maxBitsZ = 5;
+    public int maxBitsZ = 8;
 
     [Header("File Output")]
     [Tooltip("The base filename for the saved .rat animation files.")]
@@ -98,7 +98,7 @@ public class RatRecorder : MonoBehaviour
         if (state == PlayModeStateChange.ExitingPlayMode && _recordingComplete)
         {
             // Save the recording when exiting play mode
-            SaveRecording();
+            SaveRecording(true); // skip validation to avoid blocking the editor while changing play mode
         }
     }
 #endif
@@ -413,7 +413,7 @@ public class RatRecorder : MonoBehaviour
     /// Saves the recorded animation to .rat and .act files with transforms baked into vertices.
     /// This is called when exiting play mode.
     /// </summary>
-    private void SaveRecording()
+    private void SaveRecording(bool skipValidation = false)
     {
         if (_recordedFrames.Count == 0) return;
 
@@ -430,6 +430,7 @@ public class RatRecorder : MonoBehaviour
                 UnityEngine.Debug.LogWarning($"RatRecorder: Frame count ({framesToExport.Count}) does not match transform count ({frameTransforms.Count}). ExportAnimation expects them to be equal. Will proceed with available transforms.");
             }
             
+            Debug.Log("RatRecorder: Starting export...");
             Rat.Tool.ExportAnimation(
                 baseFilename,
                 framesToExport,
@@ -440,8 +441,10 @@ public class RatRecorder : MonoBehaviour
                 textureFilename,
                 maxFileSizeKB,
                 Rat.ActorRenderingMode.TextureWithDirectionalLight,
-                frameTransforms  // Pass transforms
+                frameTransforms,  // Pass transforms
+                skipValidation
             );
+            Debug.Log("RatRecorder: Export finished");
             
             Debug.Log($"RatRecorder: Export complete - all transforms baked into vertices");
 
@@ -467,7 +470,7 @@ public class RatRecorder : MonoBehaviour
         }
         catch (System.Exception e)
         {
-            Debug.LogError($"RatRecorder: Export failed - {e.Message}");
+            Debug.LogError($"RatRecorder: Export failed - {e.Message}\n{e}");
         }
 
     _recordedFrames.Clear();

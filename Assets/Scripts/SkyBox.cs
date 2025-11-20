@@ -571,10 +571,10 @@ namespace ZizSceneEditor.Assets.Scripts.Shapes
                 Debug.Log($"SkyBox: Exported mesh with vertex colours and transforms baked into vertices");
             }
         }
-        catch (System.Exception e)
-        {
-            Debug.LogError($"SkyBox: Export failed - {e.Message}");
-        }
+                catch (System.Exception e)
+                {
+                    Debug.LogError($"SkyBox: Export failed - {e.Message}\n{e}");
+                }
 
         // Clean up
         foreach (var frameMesh in animationFrames)

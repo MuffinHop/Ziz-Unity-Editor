@@ -257,7 +257,7 @@ public abstract class Shape : MonoBehaviour
         }
         catch (System.Exception e)
         {
-            Debug.LogError($"Shape: Export failed - {e.Message}");
+            Debug.LogError($"Shape: Export failed - {e.Message}\n{e}");
         }
 
         foreach (var frameMesh in animationFrames)

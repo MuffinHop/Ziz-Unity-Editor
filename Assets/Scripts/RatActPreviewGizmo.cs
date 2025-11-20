@@ -436,11 +436,14 @@ public class RatActPreviewGizmo : MonoBehaviour
                 {
                     var pathBytes = new byte[i - start];
                     System.Array.Copy(ratBlob, start, pathBytes, 0, i - start);
-                    ratPaths.Add(System.Text.Encoding.UTF8.GetString(pathBytes));
+                    string ratPath = System.Text.Encoding.UTF8.GetString(pathBytes);
+                    ratPaths.Add(ratPath);
+                    Debug.Log($"RatActPreviewGizmo: Read RAT path from ACT: '{ratPath}'");
                     start = i + 1;
                 }
             }
             data.ratFilePaths.AddRange(ratPaths);
+            Debug.Log($"RatActPreviewGizmo: ACT file references {ratPaths.Count} RAT files (expected {header.num_rat_files})");
             
             // Read mesh indices
             stream.Seek(header.mesh_indices_offset, SeekOrigin.Begin);

@@ -80,7 +80,7 @@ public class SDFParticleRecorder : MonoBehaviour
 
     [Tooltip("Maximum file size in KB before splitting into multiple parts.")]
     [Range(16, 1024)]
-    public int maxFileSizeKB = 64;
+    public int maxFileSizeKB = 512;
 
     [Tooltip("Automatically export when exiting play mode.")]
     public bool autoExportOnPlayModeExit = true;
@@ -91,10 +91,15 @@ public class SDFParticleRecorder : MonoBehaviour
     private float _lastCaptureTime;
     private ParticleSystem.Particle[] _particleBuffer;
     private ParticleSystemRenderer _particleRenderer;
+    private Camera _mainCamera;
     
     // Storage for particle data per frame
     private List<ParticleFrameData> _recordedFrames = new List<ParticleFrameData>();
-    private List<Rat.ActorTransformFloat> _recordedTransforms = new List<Rat.ActorTransformFloat>();
+    
+    // Slot-based particle tracking (stable indices)
+    private Dictionary<uint, int> _particleIdToSlot = new Dictionary<uint, int>();
+    private HashSet<int> _freeSlots = new HashSet<int>();
+    private int _nextSlotIndex = 0;
     
     // SDF shape template (used to generate texture)
     private SDFShape _sdfShapeTemplate;
@@ -148,6 +153,9 @@ public class SDFParticleRecorder : MonoBehaviour
         // Get the particle renderer for visibility checks
         _particleRenderer = targetParticleSystem.GetComponent<ParticleSystemRenderer>();
         
+        // Cache main camera for billboard calculations
+        _mainCamera = Camera.main;
+        
         // Set base filename to GameObject name if it's still the default
         if (string.IsNullOrEmpty(baseFilename) || baseFilename == "particle_system")
         {
@@ -199,6 +207,12 @@ public class SDFParticleRecorder : MonoBehaviour
     void Start()
     {
         baseFilename = gameObject.name;
+        // Sanitize filename
+        foreach (char c in Path.GetInvalidFileNameChars())
+        {
+            baseFilename = baseFilename.Replace(c, '_');
+        }
+
         // Create SDF shape template for texture generation (or recreate if needed)
         if (_sdfShapeTemplate == null)
         {
@@ -431,7 +445,17 @@ public class SDFParticleRecorder : MonoBehaviour
         }
 
     _recordedFrames.Clear();
-    _recordedTransforms.Clear();
+        
+        // Reset slot tracking
+        _particleIdToSlot.Clear();
+        _freeSlots.Clear();
+        _nextSlotIndex = 0;
+        int maxParticles = targetParticleSystem.main.maxParticles;
+        for (int i = 0; i < maxParticles; i++)
+        {
+            _freeSlots.Add(i);
+        }
+        
         _recordingStartTime = Time.time;
         _lastCaptureTime = Time.time;
         _isRecording = true;
@@ -445,17 +469,70 @@ public class SDFParticleRecorder : MonoBehaviour
     {
         if (targetParticleSystem == null) return;
 
+        int maxParticles = targetParticleSystem.main.maxParticles;
+        
+        // Ensure buffer is large enough
+        if (_particleBuffer == null || _particleBuffer.Length < maxParticles)
+        {
+            _particleBuffer = new ParticleSystem.Particle[maxParticles];
+        }
+
         // Get current particle data
         int particleCount = targetParticleSystem.GetParticles(_particleBuffer);
 
-        ParticleFrameData frameData = new ParticleFrameData(particleCount);
+        // Track which particle IDs are alive this frame
+        HashSet<uint> aliveParticleIds = new HashSet<uint>();
+        
+        // Initialize frame with all slots as inactive
+        ParticleFrameData frameData = new ParticleFrameData(maxParticles);
         frameData.timestamp = Time.time - _recordingStartTime;
+        
+        // Get spawn position for inactive particles
+        Vector3 spawnPosition = GetSpawnPosition();
+        
+        // Create inactive particle template
+        ParticleInstance inactiveParticle = new ParticleInstance
+        {
+            position = spawnPosition,
+            rotation = Vector3.zero,
+            scale = new Vector3(0.001f, 0.001f, 0.001f),
+            color = new Color(particleColor.r, particleColor.g, particleColor.b, 0f)
+        };
+        
+        // Fill all slots with inactive particles first
+        for (int i = 0; i < maxParticles; i++)
+        {
+            frameData.particles.Add(inactiveParticle);
+        }
 
-        // Convert Unity particles to our particle instances
+        // Process active particles and assign them to stable slots
         for (int i = 0; i < particleCount; i++)
         {
             ParticleSystem.Particle p = _particleBuffer[i];
+            uint particleId = p.randomSeed; // Use randomSeed as stable particle ID
             
+            aliveParticleIds.Add(particleId);
+            
+            // Assign or get slot for this particle
+            int slotIndex;
+            if (!_particleIdToSlot.TryGetValue(particleId, out slotIndex))
+            {
+                // New particle - assign it a slot
+                if (_freeSlots.Count > 0)
+                {
+                    slotIndex = _freeSlots.First();
+                    _freeSlots.Remove(slotIndex);
+                }
+                else
+                {
+                    // Fallback: use next available index (shouldn't happen with proper maxParticles)
+                    slotIndex = _nextSlotIndex % maxParticles;
+                    _nextSlotIndex++;
+                }
+                _particleIdToSlot[particleId] = slotIndex;
+            }
+            
+            // Create particle instance with actual data
             ParticleInstance instance = new ParticleInstance
             {
                 position = p.position,
@@ -463,13 +540,57 @@ public class SDFParticleRecorder : MonoBehaviour
                 scale = new Vector3(p.GetCurrentSize(targetParticleSystem), p.GetCurrentSize(targetParticleSystem), 1f),
                 color = useParticleSystemColors ? p.GetCurrentColor(targetParticleSystem) : particleColor
             };
-
-            frameData.particles.Add(instance);
+            
+            // Place particle in its stable slot
+            frameData.particles[slotIndex] = instance;
         }
-
+        
+        // Free up slots from dead particles
+        List<uint> deadParticles = new List<uint>();
+        foreach (var kvp in _particleIdToSlot)
+        {
+            if (!aliveParticleIds.Contains(kvp.Key))
+            {
+                _freeSlots.Add(kvp.Value);
+                deadParticles.Add(kvp.Key);
+            }
+        }
+        foreach (uint deadId in deadParticles)
+        {
+            _particleIdToSlot.Remove(deadId);
+        }
+        
+        // Add frame to recorded frames
         _recordedFrames.Add(frameData);
-    _recordedTransforms.Add(new Rat.ActorTransformFloat { position = transform.position, rotation = transform.eulerAngles, scale = transform.lossyScale, rat_file_index = 0, rat_local_frame = (uint)_recordedFrames.Count - 1 });
+    }
 
+    /// <summary>
+    /// Gets the spawn position for inactive particles based on the particle system's shape module
+    /// </summary>
+    private Vector3 GetSpawnPosition()
+    {
+        if (targetParticleSystem == null) return Vector3.zero;
+
+        var shape = targetParticleSystem.shape;
+        var main = targetParticleSystem.main;
+        
+        // Get the spawn position in the appropriate space
+        Vector3 spawnPos = Vector3.zero;
+        
+        if (main.simulationSpace == ParticleSystemSimulationSpace.World)
+        {
+            spawnPos = transform.position;
+        }
+        else if (main.simulationSpace == ParticleSystemSimulationSpace.Local)
+        {
+            spawnPos = Vector3.zero; // Local space origin
+        }
+        else if (main.simulationSpace == ParticleSystemSimulationSpace.Custom && main.customSimulationSpace != null)
+        {
+            spawnPos = main.customSimulationSpace.position;
+        }
+        
+        return spawnPos;
     }
 
     /// <summary>
@@ -503,20 +624,24 @@ public class SDFParticleRecorder : MonoBehaviour
 
     /// <summary>
     /// Exports recorded particle data to .act and .rat files with transforms baked into vertices
+    /// Creates multiple RAT chunks (one per particle configuration) but only one ACT file
     /// </summary>
     private void ExportToActAndRat()
     {
-    Debug.Log("SDFParticleRecorder - starting export");
+        Debug.Log($"SDFParticleRecorder - starting export ({_recordedFrames.Count} frames)");
 
-        // Find maximum particle count across all frames
-        int maxParticles = 0;
-        foreach (var frame in _recordedFrames)
+        // Use the particle system's max particles - all frames should have this count
+        int maxParticles = targetParticleSystem.main.maxParticles;
+
+        // Validate max particles for RAT format (ushort index limit)
+        // Each particle uses 4 vertices. 65535 / 4 = 16383.75
+        if (maxParticles > 16383)
         {
-            if (frame.particles.Count > maxParticles)
-                maxParticles = frame.particles.Count;
+            Debug.LogError($"SDFParticleRecorder: Particle system has {maxParticles} max particles, which requires {maxParticles * 4} vertices. RAT format is limited to 65535 vertices (approx 16383 particles). Export aborted to prevent corruption.");
+            return;
         }
 
-    Debug.Log($"SDFParticleRecorder - max particles per frame: {maxParticles}");
+        Debug.Log($"SDFParticleRecorder - max particles: {maxParticles}");
 
         // Generate mesh data (quad per particle)
         // Each particle is a quad with 4 vertices
@@ -525,83 +650,50 @@ public class SDFParticleRecorder : MonoBehaviour
 
         // Create mesh topology (shared across all frames)
         ushort[] indices = new ushort[maxParticles * 6]; // 2 triangles per quad
-        Vector2[] uvs = new Vector2[totalVertices];
-        Color[] colors = new Color[totalVertices];
+        Vector2[] staticUVs = new Vector2[totalVertices];
+        Color[] staticColors = new Color[totalVertices];
 
-        // Build quad topology and UVs
+        // Build quad topology, UVs, and default colors
         for (int i = 0; i < maxParticles; i++)
         {
             int vertexOffset = i * 4;
             int indexOffset = i * 6;
 
-            // Quad indices (two triangles)
-            indices[indexOffset + 0] = (ushort)(vertexOffset + 0);
-            indices[indexOffset + 1] = (ushort)(vertexOffset + 1);
-            indices[indexOffset + 2] = (ushort)(vertexOffset + 2);
-            indices[indexOffset + 3] = (ushort)(vertexOffset + 2);
-            indices[indexOffset + 4] = (ushort)(vertexOffset + 1);
-            indices[indexOffset + 5] = (ushort)(vertexOffset + 3);
+            // Quad indices (two triangles, standard counter-clockwise winding)
+            // A quad is made of two triangles: (0, 2, 1) and (2, 3, 1)
+            // Vertex layout: 0=BL, 1=BR, 2=TL, 3=TR
+            indices[indexOffset + 0] = (ushort)(vertexOffset + 0); // Triangle 1: V0 (BL)
+            indices[indexOffset + 1] = (ushort)(vertexOffset + 2); // Triangle 1: V2 (TL)
+            indices[indexOffset + 2] = (ushort)(vertexOffset + 1); // Triangle 1: V1 (BR)
+
+            indices[indexOffset + 3] = (ushort)(vertexOffset + 2); // Triangle 2: V2 (TL)
+            indices[indexOffset + 4] = (ushort)(vertexOffset + 3); // Triangle 2: V3 (TR)
+            indices[indexOffset + 5] = (ushort)(vertexOffset + 1); // Triangle 2: V1 (BR)
 
             // Quad UVs (standard quad mapping)
-            uvs[vertexOffset + 0] = new Vector2(0, 0); // Bottom-left
-            uvs[vertexOffset + 1] = new Vector2(1, 0); // Bottom-right
-            uvs[vertexOffset + 2] = new Vector2(0, 1); // Top-left
-            uvs[vertexOffset + 3] = new Vector2(1, 1); // Top-right
+            staticUVs[vertexOffset + 0] = new Vector2(0, 0); // Bottom-left
+            staticUVs[vertexOffset + 1] = new Vector2(1, 0); // Bottom-right
+            staticUVs[vertexOffset + 2] = new Vector2(0, 1); // Top-left
+            staticUVs[vertexOffset + 3] = new Vector2(1, 1); // Top-right
+            
+            // Default white color for all vertices
+            staticColors[vertexOffset + 0] = Color.white;
+            staticColors[vertexOffset + 1] = Color.white;
+            staticColors[vertexOffset + 2] = Color.white;
+            staticColors[vertexOffset + 3] = Color.white;
+            
+            // Debug first particle's indices and UVs
+            if (i == 0)
+            {
+                Debug.Log($"SDFParticleRecorder - First particle indices setup:\n" +
+                         $"  Vertex offset: {vertexOffset}, Index offset: {indexOffset}\n" +
+                         $"  Triangle 1: indices[{indexOffset}]={indices[indexOffset + 0]}, indices[{indexOffset + 1}]={indices[indexOffset + 1]}, indices[{indexOffset + 2}]={indices[indexOffset + 2]}\n" +
+                         $"  Triangle 2: indices[{indexOffset + 3}]={indices[indexOffset + 3]}, indices[{indexOffset + 4}]={indices[indexOffset + 4]}, indices[{indexOffset + 5}]={indices[indexOffset + 5]}\n" +
+                         $"  UVs: V{vertexOffset}={staticUVs[vertexOffset + 0]}, V{vertexOffset + 1}={staticUVs[vertexOffset + 1]}, V{vertexOffset + 2}={staticUVs[vertexOffset + 2]}, V{vertexOffset + 3}={staticUVs[vertexOffset + 3]}");
+            }
         }
 
-        // Build per-frame vertex positions
-        List<Vector3[]> frameVertices = new List<Vector3[]>();
-
-        foreach (var frame in _recordedFrames)
-        {
-            Vector3[] vertices = new Vector3[totalVertices];
-
-            // Initialize all vertices to origin (inactive particles)
-            for (int i = 0; i < totalVertices; i++)
-            {
-                vertices[i] = Vector3.zero;
-            }
-
-            // Position active particles
-            for (int i = 0; i < frame.particles.Count; i++)
-            {
-                ParticleInstance particle = frame.particles[i];
-                int vertexOffset = i * 4;
-
-                // Build a quad centered at particle position
-                Vector3 right = Vector3.right * particle.scale.x * 0.5f;
-                Vector3 up = Vector3.up * particle.scale.y * 0.5f;
-
-                // Apply rotation if needed
-                if (particle.rotation != Vector3.zero)
-                {
-                    Quaternion rot = Quaternion.Euler(particle.rotation);
-                    right = rot * right;
-                    up = rot * up;
-                }
-
-                // Convert particle position into the particle system's local space if necessary
-                var simulationSpace = targetParticleSystem.main.simulationSpace;
-                Vector3 localPos = particle.position;
-                if (simulationSpace == ParticleSystemSimulationSpace.World)
-                    localPos = transform.InverseTransformPoint(particle.position);
-
-                vertices[vertexOffset + 0] = localPos - right - up; // Bottom-left
-                vertices[vertexOffset + 1] = localPos + right - up; // Bottom-right
-                vertices[vertexOffset + 2] = localPos - right + up; // Top-left
-                vertices[vertexOffset + 3] = localPos + right + up; // Top-right
-
-                // Set colors for this particle's quad
-                for (int v = 0; v < 4; v++)
-                {
-                    colors[vertexOffset + v] = particle.color;
-                }
-            }
-
-            frameVertices.Add(vertices);
-        }
-
-        // Generate texture filename based on SDF shape
+        // Generate texture filename based on SDF shape (before loop)
         int width, height;
         switch (shapeResolution)
         {
@@ -633,42 +725,359 @@ public class SDFParticleRecorder : MonoBehaviour
             _sdfShapeTemplate.EnsureTextureExported();
         }
 
-    Debug.Log($"SDFParticleRecorder - using texture: {textureFilename}");
+        Debug.Log($"SDFParticleRecorder - using texture: {textureFilename}");
 
-        // Create a dummy mesh with the quad topology
+        // Create a dummy mesh with the quad topology (shared across all chunks)
         Mesh quadMesh = new Mesh();
         quadMesh.vertices = new Vector3[totalVertices];
         quadMesh.triangles = indices.Select(i => (int)i).ToArray();
-        quadMesh.uv = uvs;
-
-        // Bake transforms into frame data (per-frame transforms captured during recording)
-        List<Rat.ActorTransformFloat> frameTransforms = new List<Rat.ActorTransformFloat>(_recordedTransforms);
-        if (frameTransforms.Count != frameVertices.Count)
+        quadMesh.uv = staticUVs;
+        quadMesh.colors = staticColors;
+        quadMesh.RecalculateBounds();
+        
+        // Get GeneratedData path
+        string generatedDataPath = Path.Combine(Application.dataPath.Replace("Assets", ""), "GeneratedData");
+        if (!Directory.Exists(generatedDataPath))
         {
-            UnityEngine.Debug.LogWarning($"SDFParticleRecorder - frame count ({frameVertices.Count}) doesn't match transforms ({frameTransforms.Count})");
+            Directory.CreateDirectory(generatedDataPath);
+        }
+        
+        // Build per-frame vertex positions for all recorded frames
+        List<Vector3[]> frameVertices = new List<Vector3[]>();
+        // Track active particles to fix their positions later (to ensure they stay within bounds)
+        List<bool[]> frameActiveFlags = new List<bool[]>();
+        
+        // Initialize bounds for active particles
+        Vector3 minBounds = new Vector3(float.MaxValue, float.MaxValue, float.MaxValue);
+        Vector3 maxBounds = new Vector3(float.MinValue, float.MinValue, float.MinValue);
+        bool hasActiveParticles = false;
+        
+        Debug.Log($"SDFParticleRecorder - building vertex frames ({_recordedFrames.Count} frames, {totalVertices} vertices)...");
+
+        foreach (var frame in _recordedFrames)
+        {
+            Vector3[] vertices = new Vector3[totalVertices];
+            bool[] activeFlags = new bool[maxParticles];
+
+            // Process all particles (maxParticles count)
+            for (int i = 0; i < maxParticles; i++)
+            {
+                int vertexOffset = i * 4;
+                
+                // Get particle data (always present due to slot-based tracking)
+                ParticleInstance particle = frame.particles[i];
+                
+                // Check if particle is active (scale > threshold indicates active particle)
+                bool isActive = particle.scale.magnitude > 0.01f;
+                activeFlags[i] = isActive;
+                
+                if (isActive)
+                {
+                    hasActiveParticles = true;
+
+                    // Get world and local positions
+                    var simulationSpace = targetParticleSystem.main.simulationSpace;
+                    Vector3 worldPos = (simulationSpace == ParticleSystemSimulationSpace.World)
+                        ? particle.position
+                        : transform.TransformPoint(particle.position);
+
+                    // 1. Create billboard matrix to face the camera (or default orientation)
+                    Matrix4x4 billboardMatrix;
+                    if (_mainCamera != null)
+                    {
+                        // This matrix will orient an object at 'worldPos' to face the camera.
+                        // We extract only the rotation part to use it for orienting the quad vertices.
+                        Vector3 viewDir = worldPos - _mainCamera.transform.position;
+                        if (viewDir.sqrMagnitude < 0.0001f) viewDir = Vector3.forward;
+                        billboardMatrix = Matrix4x4.TRS(Vector3.zero, Quaternion.LookRotation(viewDir, Vector3.up), Vector3.one);
+                    }
+                    else
+                    {
+                        // Fallback to identity if no camera
+                        billboardMatrix = Matrix4x4.identity;
+                    }
+
+                    // 2. Apply particle's own rotation to the billboard matrix
+                    if (particle.rotation != Vector3.zero)
+                    {
+                        billboardMatrix *= Matrix4x4.Rotate(Quaternion.Euler(particle.rotation));
+                    }
+
+                    // 3. Define quad corners in local particle space (centered unit quad)
+                    Vector3 v0 = new Vector3(-0.5f, -0.5f, 0); // Bottom-left
+                    Vector3 v1 = new Vector3( 0.5f, -0.5f, 0); // Bottom-right
+                    Vector3 v2 = new Vector3(-0.5f,  0.5f, 0); // Top-left
+                    Vector3 v3 = new Vector3( 0.5f,  0.5f, 0); // Top-right
+
+                    // 4. Orient, scale, and position the vertices
+                    Vector3 final_v0 = worldPos + billboardMatrix.MultiplyVector(v0) * particle.scale.x;
+                    Vector3 final_v1 = worldPos + billboardMatrix.MultiplyVector(v1) * particle.scale.x;
+                    Vector3 final_v2 = worldPos + billboardMatrix.MultiplyVector(v2) * particle.scale.y;
+                    Vector3 final_v3 = worldPos + billboardMatrix.MultiplyVector(v3) * particle.scale.y;
+
+                    // 5. Convert final world-space vertices to the particle system's local space for export
+                    if (simulationSpace == ParticleSystemSimulationSpace.World)
+                    {
+                        // If PS is in world space, the recorder's transform needs to be accounted for
+                        vertices[vertexOffset + 0] = transform.InverseTransformPoint(final_v0);
+                        vertices[vertexOffset + 1] = transform.InverseTransformPoint(final_v1);
+                        vertices[vertexOffset + 2] = transform.InverseTransformPoint(final_v2);
+                        vertices[vertexOffset + 3] = transform.InverseTransformPoint(final_v3);
+                    }
+                    else // Local or Custom space
+                    {
+                        vertices[vertexOffset + 0] = final_v0;
+                        vertices[vertexOffset + 1] = final_v1;
+                        vertices[vertexOffset + 2] = final_v2;
+                        vertices[vertexOffset + 3] = final_v3;
+                    }
+                    
+                    // Update bounds
+                    minBounds = Vector3.Min(minBounds, vertices[vertexOffset + 0]);
+                    minBounds = Vector3.Min(minBounds, vertices[vertexOffset + 1]);
+                    minBounds = Vector3.Min(minBounds, vertices[vertexOffset + 2]);
+                    minBounds = Vector3.Min(minBounds, vertices[vertexOffset + 3]);
+                    
+                    maxBounds = Vector3.Max(maxBounds, vertices[vertexOffset + 0]);
+                    maxBounds = Vector3.Max(maxBounds, vertices[vertexOffset + 1]);
+                    maxBounds = Vector3.Max(maxBounds, vertices[vertexOffset + 2]);
+                    maxBounds = Vector3.Max(maxBounds, vertices[vertexOffset + 3]);
+                }
+                else
+                {
+                    // Inactive particle: will be fixed to minBounds later
+                    // Just set to zero for now
+                    vertices[vertexOffset + 0] = Vector3.zero;
+                    vertices[vertexOffset + 1] = Vector3.zero;
+                    vertices[vertexOffset + 2] = Vector3.zero;
+                    vertices[vertexOffset + 3] = Vector3.zero;
+                }
+            }
+
+            frameVertices.Add(vertices);
+            frameActiveFlags.Add(activeFlags);
+        }
+        
+        // Handle no active particles case
+        if (!hasActiveParticles)
+        {
+            Debug.LogWarning($"SDFParticleRecorder - no active particles, using default bounds");
+            minBounds = Vector3.zero;
+            maxBounds = Vector3.one;
+        }
+        else
+        {
+            Debug.Log($"SDFParticleRecorder - optimized bounds from active vertices: Min({minBounds.x:F3}, {minBounds.y:F3}, {minBounds.z:F3}) Max({maxBounds.x:F3}, {maxBounds.y:F3}, {maxBounds.z:F3})");
         }
 
+        // Fix inactive particles by snapping them to minBounds
+        // This ensures they are within the compression bounds and won't cause verification errors
+        for (int f = 0; f < frameVertices.Count; f++)
+        {
+            Vector3[] vertices = frameVertices[f];
+            bool[] activeFlags = frameActiveFlags[f];
+            
+            for (int i = 0; i < maxParticles; i++)
+            {
+                if (!activeFlags[i])
+                {
+                    int vertexOffset = i * 4;
+                    vertices[vertexOffset + 0] = minBounds;
+                    vertices[vertexOffset + 1] = minBounds;
+                    vertices[vertexOffset + 2] = minBounds;
+                    vertices[vertexOffset + 3] = minBounds;
+                }
+            }
+        }
+        
+        // Create full path for RAT file export
+        string fullPath = Path.Combine(generatedDataPath, baseFilename);
+        
+        Debug.Log($"SDFParticleRecorder - built {frameVertices.Count} frames");
+        
+        // Compress and export as RAT file(s)
+        List<string> allCreatedRatFiles = new List<string>();
         try
         {
-            // Use unified export API with transforms to be baked
-            Rat.Tool.ExportAnimation(
-                baseFilename,
+            Debug.Log($"SDFParticleRecorder - starting compression...");
+            
+            // Compress the animation data with custom bounds
+            Rat.CompressedAnimation compressedAnim = Rat.Tool.CompressFromFramesWithBounds(
                 frameVertices,
                 quadMesh,
-                uvs,
-                colors,
-                captureFramerate,
-                textureFilename,  // Just the filename, no "assets/" prefix
-                maxFileSizeKB,
-                Rat.ActorRenderingMode.TextureWithDirectionalLight,
-                frameTransforms  // Pass transforms
+                staticUVs,
+                staticColors,
+                minBounds,
+                maxBounds,
+                preserveFirstFrame: false
             );
             
-            Debug.Log($"SDFParticleRecorder - export complete (transforms baked into vertices)");
+            Debug.Log($"SDFParticleRecorder - compression complete, writing file...");
+            
+            // Write RAT file(s) with size splitting
+            List<string> ratFiles = Rat.Tool.WriteRatFileWithSizeSplitting(
+                fullPath,
+                compressedAnim,
+                maxFileSizeKB
+            );
+            
+            allCreatedRatFiles.AddRange(ratFiles);
+            
+            Debug.Log($"SDFParticleRecorder - exported: {ratFiles.Count} RAT file(s)");
+            foreach (var ratFile in ratFiles)
+            {
+                Debug.Log($"  - {ratFile}");
+            }
+
+            // Verify the export immediately
+            VerifyExport(ratFiles, frameVertices, minBounds, maxBounds);
         }
         catch (System.Exception e)
         {
-            Debug.LogError($"SDFParticleRecorder - export failed: {e.Message}");
+            Debug.LogError($"SDFParticleRecorder - export failed: {e.Message}\n{e.StackTrace}");
+        }
+        
+        // Create a single ACT file referencing all RAT files
+        if (allCreatedRatFiles.Count > 0)
+        {
+            try
+            {
+                Debug.Log($"SDFParticleRecorder - Total RAT files created: {allCreatedRatFiles.Count}");
+                
+                // Convert RAT file paths to just filenames (relative to GeneratedData folder)
+                List<string> ratFilenames = allCreatedRatFiles.Select(f => Path.GetFileName(f)).ToList();
+                
+                Debug.Log($"SDFParticleRecorder - RAT filenames for ACT:");
+                foreach (var filename in ratFilenames)
+                {
+                    Debug.Log($"  - {filename}");
+                }
+                
+                // Create Actor animation data
+                ActorAnimationData actorData = new ActorAnimationData();
+                actorData.framerate = captureFramerate;
+                actorData.ratFilePaths = ratFilenames;
+                actorData.textureFilename = textureFilename;
+                
+                // Set mesh data from the quad mesh
+                actorData.meshUVs = staticUVs.Select(uv => new Vector2(uv.x, uv.y)).ToArray();
+                actorData.meshColors = staticColors;
+                actorData.meshIndices = quadMesh.triangles;
+                
+                // Save single ACT file
+                string actFilePath = Path.Combine(generatedDataPath, baseFilename + ".act");
+                Actor.SaveActorData(actFilePath, actorData, Rat.ActorRenderingMode.TextureWithDirectionalLight, embedMeshData: true);
+                
+                Debug.Log($"SDFParticleRecorder - created single ACT file: {baseFilename}.act ({allCreatedRatFiles.Count} RAT chunks)");
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"SDFParticleRecorder - ACT file creation failed: {e.Message}");
+            }
+        }
+        
+        Debug.Log($"SDFParticleRecorder - export complete: {allCreatedRatFiles.Count} RAT files, 1 ACT file");
+    }
+
+    /// <summary>
+    /// Verifies the exported RAT files by reading them back and comparing with original data.
+    /// This helps diagnose corruption issues (quantization artifacts vs data corruption).
+    /// </summary>
+    private void VerifyExport(List<string> ratFiles, List<Vector3[]> originalFrames, Vector3 minBounds, Vector3 maxBounds)
+    {
+        Debug.Log("SDFParticleRecorder - Verifying export integrity...");
+        
+        // Calculate expected precision (quantization step size)
+        Vector3 range = maxBounds - minBounds;
+        // Avoid division by zero
+        if (range.x == 0) range.x = 1;
+        if (range.y == 0) range.y = 1;
+        if (range.z == 0) range.z = 1;
+
+        Vector3 step = new Vector3(
+            range.x / 255f,
+            range.y / 255f,
+            range.z / 255f
+        );
+        
+        // The maximum error introduced by quantization is half the step size on each axis
+        float maxQuantizationError = Mathf.Sqrt(step.x*step.x + step.y*step.y + step.z*step.z) * 0.5f;
+        
+        Debug.Log($"Verification: Bounds size {range}, Max expected quantization error: {maxQuantizationError:F5}");
+
+        int globalFrameIndex = 0;
+        bool hasErrors = false;
+        
+        foreach (string filePath in ratFiles)
+        {
+            try 
+            {
+                // Read the file back
+                var anim = Rat.Core.ReadRatFile(filePath);
+                var ctx = Rat.Core.CreateDecompressionContext(anim);
+                
+                Debug.Log($"Verifying {Path.GetFileName(filePath)}: {anim.num_frames} frames...");
+                
+                // Check each frame in this chunk
+                for (uint i = 0; i < anim.num_frames; i++)
+                {
+                    if (globalFrameIndex >= originalFrames.Count) break;
+                    
+                    Rat.Core.DecompressToFrame(ctx, anim, i);
+                    
+                    // Compare vertices
+                    Vector3[] original = originalFrames[globalFrameIndex];
+                    float maxFrameError = 0f;
+                    int maxErrorVertex = -1;
+                    
+                    for (int v = 0; v < anim.num_vertices; v++)
+                    {
+                        // Dequantize: map 0-255 back to min-max
+                        var q = ctx.current_positions[v];
+                        Vector3 reconstructed = new Vector3(
+                            anim.min_x + (q.x / 255f) * (anim.max_x - anim.min_x),
+                            anim.min_y + (q.y / 255f) * (anim.max_y - anim.min_y),
+                            anim.min_z + (q.z / 255f) * (anim.max_z - anim.min_z)
+                        );
+                        
+                        float dist = Vector3.Distance(reconstructed, original[v]);
+                        if (dist > maxFrameError) 
+                        {
+                            maxFrameError = dist;
+                            maxErrorVertex = v;
+                        }
+                    }
+                    
+                    // Check if error is acceptable (allow small margin for float precision)
+                    // If error is significantly larger than quantization step, it's likely data corruption
+                    if (maxFrameError > maxQuantizationError * 1.5f + 0.01f)
+                    {
+                        Debug.LogError($"Verification FAILED at Global Frame {globalFrameIndex} (Local {i}) in {Path.GetFileName(filePath)}.\n" +
+                                     $"Max Error: {maxFrameError:F5} (Expected < {maxQuantizationError:F5})\n" +
+                                     $"Vertex: {maxErrorVertex}\n" +
+                                     $"Possible Causes:\n" +
+                                     $"1. Delta Compression Drift: If error increases over time, the delta encoding is failing.\n" +
+                                     $"2. Bounds Mismatch: If error is constant but high, the bounds used for compression don't match decompression.\n" +
+                                     $"3. Data Corruption: If error is random/huge, the file structure might be invalid.");
+                        hasErrors = true;
+                        
+                        // Stop after first error to avoid spam
+                        return; 
+                    }
+                    
+                    globalFrameIndex++;
+                }
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"Verification FAILED reading {filePath}: {e.Message}");
+                return;
+            }
+        }
+        
+        if (!hasErrors)
+        {
+            Debug.Log("SDFParticleRecorder - Verification PASSED. Exported data matches recorded data within quantization limits.");
         }
     }
 

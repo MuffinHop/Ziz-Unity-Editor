@@ -680,7 +680,7 @@ public class SDFShape : MonoBehaviour
             if (Time.frameCount % 300 == 0)
             {
                 float sdfFrameRate = CalculateHypotheticalFrameRate(totalSdfVertices);
-                Debug.Log($"[Performance] SDF FPS: {sdfFrameRate:F1} | Vertices: {totalSdfVertices}");
+                //Debug.Log($"[Performance] SDF FPS: {sdfFrameRate:F1} | Vertices: {totalSdfVertices}");
             }
         }
         catch
@@ -838,7 +838,7 @@ public class SDFShape : MonoBehaviour
                 }
                 catch (System.Exception e)
                 {
-                    Debug.LogError($"Failed to export shape '{gameObjectName}': {e.Message}");
+                    Debug.LogError($"Failed to export shape '{gameObjectName}': {e.Message}\n{e}");
                 }
             }
         }

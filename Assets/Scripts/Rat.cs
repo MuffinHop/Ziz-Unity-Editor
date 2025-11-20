@@ -59,6 +59,21 @@ namespace Rat
         public byte[] reserved;
     }
 
+    /// <summary>
+    /// Material and rendering mode options for Actor rendering
+    /// </summary>
+    public enum ActorRenderingMode
+    {
+        VertexColoursOnly,
+        VertexColoursWithDirectionalLight,
+        VertexColoursWithVertexLighting,
+        TextureOnly,
+        TextureAndVertexColours,
+        TextureWithDirectionalLight,
+        TextureAndVertexColoursAndDirectionalLight,
+        MatCap
+    }
+
 
 
     public class CompressedAnimation
@@ -72,6 +87,8 @@ namespace Rat
         public uint[] delta_stream;
         public VertexU8[] first_frame;
         public UnityEngine.Vector3[] first_frame_raw; // For uncompressed first frame
+    // Full quantized frames (for chunk-splitting validation and chunking)
+    public VertexU8[][] quantized_frames;
         public bool isFirstFrameRaw = false;
         public float min_x, min_y, min_z;
         public float max_x, max_y, max_z;
@@ -283,7 +300,7 @@ namespace Rat
                 current_positions = new VertexU8[anim.num_vertices],
                 current_frame = 0
             };
-            Array.Copy(anim.first_frame, ctx.current_positions, anim.num_vertices);
+            Array.Copy(anim.first_frame, ctx.current_positions, (int)anim.num_vertices);
             return ctx;
         }
 
@@ -294,7 +311,7 @@ namespace Rat
 
             if (targetFrame < ctx.current_frame || ctx.current_frame == 0)
             {
-                Array.Copy(anim.first_frame, ctx.current_positions, anim.num_vertices);
+                Array.Copy(anim.first_frame, ctx.current_positions, (int)anim.num_vertices);
                 ctx.current_frame = 0;
             }
 
@@ -332,6 +349,274 @@ namespace Rat
 
     public static class Tool
     {
+        /// <summary>
+        /// Computes the per-chunk metadata (list of chunk start frame and word counts) without writing files.
+        /// Internal helper used by chunked writer.
+        /// </summary>
+        private class ChunkSpec
+        {
+            public uint startDeltaFrame;
+            public uint chunkDeltaFrames;
+            public uint startDeltaWord;
+            public uint chunkDeltaWords;
+            public string filename;
+            public CompressedAnimation chunkAnim;
+        }
+
+        public static void WriteRatFileWithSizeSplittingChunked(
+            string baseFilename,
+            CompressedAnimation anim,
+            int maxFileSizeKB = 64,
+            List<UnityEngine.Vector3[]> processedFrames = null,
+            System.Action<int,int> perChunkProgress = null,
+            System.Action<List<string>> onComplete = null,
+            bool skipValidation = false)
+        {
+#if UNITY_EDITOR
+            // We'll compute chunk specs similarly to the synchronous method, but queue writes per chunk
+            const int KB = 1024;
+            int maxFileSize = maxFileSizeKB * KB;
+            var createdFiles = new List<string>();
+
+            // Calculate static data sizes for the .rat file (V3 format)
+            uint headerSize = (uint)Marshal.SizeOf(typeof(RatHeader));
+            uint bitWidthsSize = anim.num_vertices * 3;
+            uint firstFrameSize = anim.num_vertices * (uint)Marshal.SizeOf(typeof(VertexU8));
+            string meshDataFilename = !string.IsNullOrEmpty(anim.mesh_data_filename) ? anim.mesh_data_filename : $"{baseFilename}.ratmesh";
+            byte[] meshDataFilenameBytes = System.Text.Encoding.UTF8.GetBytes(Path.GetFileName(meshDataFilename));
+            uint rawFirstFrameSize = anim.isFirstFrameRaw ? anim.num_vertices * (uint)Marshal.SizeOf(typeof(UnityEngine.Vector3)) : 0;
+            uint staticOverheadSize = headerSize + bitWidthsSize + firstFrameSize + (uint)meshDataFilenameBytes.Length + rawFirstFrameSize;
+
+            if (staticOverheadSize > maxFileSize)
+            {
+                throw new System.InvalidOperationException($"ERROR: Static RAT data ({staticOverheadSize} bytes) exceeds maximum file size ({maxFileSize} bytes)!");
+            }
+
+            // if single frame or no deltas, just write synchronously
+            if (anim.num_frames <= 1 || anim.delta_stream == null || anim.delta_stream.Length == 0)
+            {
+                string filename = $"{baseFilename}.rat";
+                using (var stream = new FileStream(filename, FileMode.Create)) WriteRatFileV3(stream, anim, Path.GetFileName(meshDataFilename));
+                createdFiles.Add(filename);
+                onComplete?.Invoke(createdFiles);
+                return;
+            }
+
+            // compute words per frame and prefixWords
+            uint bitsPerFrame = 0;
+            for (int i = 0; i < anim.num_vertices; i++) bitsPerFrame += (uint)(anim.bit_widths_x[i] + anim.bit_widths_y[i] + anim.bit_widths_z[i]);
+            uint totalDeltaFramesToCompute = (anim.num_frames > 0) ? (anim.num_frames - 1) : 0;
+            var wordsPerDeltaFrame = new uint[totalDeltaFramesToCompute > 0 ? totalDeltaFramesToCompute : 1];
+            for (uint f = 0; f < totalDeltaFramesToCompute; ++f)
+            {
+                uint wordsUpToFPlus1 = (bitsPerFrame * (f + 1) + 31) / 32;
+                uint wordsUpToF = (bitsPerFrame * f + 31) / 32;
+                uint wordsThisFrame = wordsUpToFPlus1 - wordsUpToF;
+                wordsPerDeltaFrame[f] = wordsThisFrame;
+            }
+            uint wordsPerFrame = (bitsPerFrame + 31) / 32;
+            if (wordsPerFrame == 0) wordsPerFrame = 1;
+
+            uint availableSpaceForDeltasFirst = (uint)(maxFileSize - staticOverheadSize);
+            uint staticOverheadAppend = headerSize + bitWidthsSize + firstFrameSize + (uint)meshDataFilenameBytes.Length;
+            uint availableSpaceForDeltasAppend = (uint)(maxFileSize - staticOverheadAppend);
+            uint deltaStreamWordSize = sizeof(uint);
+            uint totalDeltaWords = (uint)anim.delta_stream.Length;
+            uint totalDeltaFrames = (anim.num_frames > 0) ? (anim.num_frames - 1) : 0;
+            uint maxDeltaWordsPerChunk = availableSpaceForDeltasAppend / deltaStreamWordSize;
+            if (maxDeltaWordsPerChunk == 0) maxDeltaWordsPerChunk = 1;
+
+            uint deltaFramesPerAppendChunk = 0;
+            if (totalDeltaFrames > 0)
+            {
+                uint acc = 0;
+                for (uint i = 0; i < totalDeltaFrames; ++i)
+                {
+                    acc += wordsPerDeltaFrame[i];
+                    if (acc >= maxDeltaWordsPerChunk)
+                    {
+                        deltaFramesPerAppendChunk = i + 1;
+                        break;
+                    }
+                }
+                if (deltaFramesPerAppendChunk == 0) deltaFramesPerAppendChunk = totalDeltaFrames;
+            }
+            else deltaFramesPerAppendChunk = 1;
+            if (deltaFramesPerAppendChunk == 0) deltaFramesPerAppendChunk = 1;
+            int numberOfChunks = UnityEngine.Mathf.CeilToInt((float)totalDeltaFrames / (float)deltaFramesPerAppendChunk);
+
+            // Build prefix sums
+            uint[] prefixWords = new uint[totalDeltaFrames + 1];
+            prefixWords[0] = 0; uint running = 0;
+            for (uint f = 0; f < totalDeltaFrames; ++f) { running += wordsPerDeltaFrame[f]; prefixWords[f + 1] = running; }
+
+            var chunkSpecs = new List<ChunkSpec>();
+            uint nextStartDfIndex = 0;
+            for (int chunkIndex = 0; chunkIndex < numberOfChunks; chunkIndex++)
+            {
+                uint startDeltaFrame = nextStartDfIndex;
+                uint remainingDeltaFrames = totalDeltaFrames - startDeltaFrame;
+                uint chunkDeltaFrames = 0;
+                if (chunkIndex == 0)
+                {
+                    uint deltaWordsFirst = availableSpaceForDeltasFirst / deltaStreamWordSize;
+                    uint accWords = 0; uint framesFits = 0;
+                    for (uint ff = startDeltaFrame; ff < startDeltaFrame + remainingDeltaFrames; ++ff)
+                    {
+                        if (ff >= totalDeltaFrames) break;
+                        accWords += wordsPerDeltaFrame[ff];
+                        if (accWords >= deltaWordsFirst) { framesFits = ff - startDeltaFrame + 1; break; }
+                    }
+                    if (framesFits == 0) framesFits = 1;
+                    chunkDeltaFrames = System.Math.Min(remainingDeltaFrames, framesFits);
+                }
+                else
+                {
+                    chunkDeltaFrames = System.Math.Min(remainingDeltaFrames, deltaFramesPerAppendChunk);
+                }
+
+                uint startDeltaWord = prefixWords[startDeltaFrame];
+                uint chunkDeltaWords = 0;
+                for (uint f = startDeltaFrame; f < startDeltaFrame + chunkDeltaFrames; ++f)
+                {
+                    if (f < totalDeltaFrames) chunkDeltaWords += wordsPerDeltaFrame[f];
+                }
+
+                var spec = new ChunkSpec() { startDeltaFrame = startDeltaFrame, chunkDeltaFrames = chunkDeltaFrames, startDeltaWord = startDeltaWord, chunkDeltaWords = chunkDeltaWords };
+                chunkSpecs.Add(spec);
+                nextStartDfIndex += chunkDeltaFrames;
+            }
+
+            // Build chunk objects and filenames
+            for (int ci = 0; ci < chunkSpecs.Count; ++ci)
+            {
+                var spec = chunkSpecs[ci];
+                var chunkAnim = new CompressedAnimation
+                {
+                    num_vertices = anim.num_vertices,
+                    num_indices = anim.num_indices,
+                    num_frames = (ci == 0) ? anim.num_frames : (spec.chunkDeltaFrames + 1),
+                    min_x = anim.min_x, max_x = anim.max_x,
+                    min_y = anim.min_y, max_y = anim.max_y,
+                    min_z = anim.min_z, max_z = anim.max_z,
+                    first_frame = anim.first_frame,
+                    first_frame_raw = anim.first_frame_raw,
+                    isFirstFrameRaw = anim.isFirstFrameRaw,
+                    bit_widths_x = anim.bit_widths_x,
+                    bit_widths_y = anim.bit_widths_y,
+                    bit_widths_z = anim.bit_widths_z,
+                    mesh_data_filename = Path.GetFileName(meshDataFilename)
+                };
+
+                long startLong = Math.Min((long)spec.startDeltaWord, (long)totalDeltaWords);
+                int totalDeltaWordsInt = (int)totalDeltaWords;
+                if (spec.chunkDeltaWords > 0 && anim.delta_stream != null && anim.delta_stream.Length > 0)
+                {
+                    if (startLong >= totalDeltaWordsInt)
+                    {
+                        chunkAnim.delta_stream = new uint[0];
+                    }
+                    else
+                    {
+                        int available = totalDeltaWordsInt - (int)startLong;
+                        int copyWords = (int)Math.Min((long)spec.chunkDeltaWords, (long)available);
+                        chunkAnim.delta_stream = new uint[copyWords];
+                        System.Array.Copy(anim.delta_stream, (int)startLong, chunkAnim.delta_stream, 0, copyWords);
+                    }
+                }
+                else
+                {
+                    chunkAnim.delta_stream = new uint[0];
+                }
+
+                if (ci == 0)
+                {
+                    // Keep first frame intact
+                }
+                else
+                {
+                    if (anim.quantized_frames != null && anim.quantized_frames.Length > spec.startDeltaFrame)
+                    {
+                        chunkAnim.first_frame = anim.quantized_frames[spec.startDeltaFrame];
+                    }
+                    else
+                    {
+                        var temp = new VertexU8[chunkAnim.num_vertices];
+                        Array.Copy(anim.first_frame, temp, (int)anim.num_vertices);
+                        if (spec.startDeltaFrame > 0 && anim.delta_stream != null && anim.delta_stream.Length > 0)
+                        {
+                            var reader = new BitstreamReader(anim.delta_stream);
+                            for (uint f = 0; f < spec.startDeltaFrame; ++f)
+                            {
+                                for (int v = 0; v < temp.Length; ++v)
+                                {
+                                    int bx = anim.bit_widths_x[v];
+                                    int by = anim.bit_widths_y[v];
+                                    int bz = anim.bit_widths_z[v];
+                                    int rawx = (int)reader.Read(bx);
+                                    int dx = SignExtendLocal((uint)rawx, bx);
+                                    int rawy = (int)reader.Read(by);
+                                    int dy = SignExtendLocal((uint)rawy, by);
+                                    int rawz = (int)reader.Read(bz);
+                                    int dz = SignExtendLocal((uint)rawz, bz);
+                                    temp[v].x = (byte)(temp[v].x + dx);
+                                    temp[v].y = (byte)(temp[v].y + dy);
+                                    temp[v].z = (byte)(temp[v].z + dz);
+                                }
+                            }
+                        }
+                        chunkAnim.first_frame = temp;
+                    }
+                    chunkAnim.isFirstFrameRaw = false;
+                    chunkAnim.first_frame_raw = null;
+                    chunkAnim.mesh_data_filename = string.Empty;
+                }
+
+                string filename = (chunkSpecs.Count == 1) ? $"{baseFilename}.rat" : $"{baseFilename}_part{ci + 1:D2}of{chunkSpecs.Count:D2}.rat";
+                spec.filename = filename;
+                spec.chunkAnim = chunkAnim;
+            }
+
+            // Now write per chunk via EditorApplication.update
+            var created = new List<string>();
+            int totalChunks = chunkSpecs.Count;
+            int currentChunk = 0;
+            UnityEditor.EditorApplication.CallbackFunction updater = null;
+            updater = () =>
+            {
+                if (currentChunk >= totalChunks)
+                {
+                    UnityEditor.EditorApplication.update -= updater;
+                    onComplete?.Invoke(created);
+                    return;
+                }
+                try
+                {
+                    var spec = chunkSpecs[currentChunk];
+                    using (var stream = new FileStream(spec.filename, FileMode.Create)) WriteRatFileV3(stream, spec.chunkAnim, spec.chunkAnim.mesh_data_filename);
+                    created.Add(spec.filename);
+                    perChunkProgress?.Invoke(currentChunk + 1, totalChunks);
+                }
+                catch (System.Exception e)
+                {
+                    UnityEngine.Debug.LogError($"WriteRatFileWithSizeSplittingChunked: failed to write chunk {currentChunk + 1}: {e.Message}");
+                    UnityEditor.EditorApplication.update -= updater;
+                    onComplete?.Invoke(created);
+                    return;
+                }
+                currentChunk++;
+            };
+            // register update handler
+            UnityEditor.EditorApplication.update += updater;
+#else
+            // Non-editor fallback: synchronous write
+            var files = WriteRatFileWithSizeSplitting(baseFilename, anim, maxFileSizeKB, processedFrames, perChunkProgress);
+            onComplete?.Invoke(files);
+#endif
+        }
+        // Enable/disable optional heavy per-chunk validation (decompressing multiple frames per chunk).
+        // Disabled by default to avoid blocking the Editor during normal saves.
+        public static bool enableHeavyValidation = false;
         private static byte BitsForDelta(int delta)
         {
             int d = Math.Abs(delta);
@@ -342,6 +627,14 @@ namespace Rat
                 bits++;
             }
             return (byte)bits;
+        }
+
+        // Sign extend helper for Tool to reuse the same logic as Core.SignExtend
+        private static int SignExtendLocal(uint value, int bits)
+        {
+            if (bits == 0) return 0;
+            int shift = 32 - bits;
+            return (int)((value << shift) >> shift);
         }
 
         /// <summary>
@@ -420,7 +713,7 @@ namespace Rat
         /// <param name="anim">Compressed animation data to split and save</param>
         /// <param name="maxFileSizeKB">Maximum file size in KB before splitting (default: 64KB)</param>
         /// <returns>List of created filenames</returns>
-        public static List<string> WriteRatFileWithSizeSplitting(string baseFilename, CompressedAnimation anim, int maxFileSizeKB = 64)
+    public static List<string> WriteRatFileWithSizeSplitting(string baseFilename, CompressedAnimation anim, int maxFileSizeKB = 64, List<UnityEngine.Vector3[]> processedFrames = null, System.Action<int,int> perChunkProgress = null)
         {
             const int KB = 1024;
             int maxFileSize = maxFileSizeKB * KB;
@@ -463,36 +756,130 @@ namespace Rat
                 return createdFiles;
             }
             
-            // Calculate available space for delta data per chunk
-            uint availableSpaceForDeltas = (uint)(maxFileSize - staticOverheadSize);
+            // Calculate bits per frame and words per frame (per-frame words may vary due to bit packing)
+            uint bitsPerFrame = 0;
+            for (int i = 0; i < anim.num_vertices; i++) bitsPerFrame += (uint)(anim.bit_widths_x[i] + anim.bit_widths_y[i] + anim.bit_widths_z[i]);
+            // Precompute words used per delta-frame to account for bit packing across frames
+            uint totalDeltaFramesToCompute = (anim.num_frames > 0) ? (anim.num_frames - 1) : 0;
+            var wordsPerDeltaFrame = new uint[totalDeltaFramesToCompute > 0 ? totalDeltaFramesToCompute : 1];
+            uint cumulativeWordsBefore = 0;
+            for (uint f = 0; f < totalDeltaFramesToCompute; ++f)
+            {
+                // Words used up to and including this frame
+                uint wordsUpToFPlus1 = (bitsPerFrame * (f + 1) + 31) / 32;
+                uint wordsUpToF = (bitsPerFrame * f + 31) / 32;
+                uint wordsThisFrame = wordsUpToFPlus1 - wordsUpToF;
+                wordsPerDeltaFrame[f] = wordsThisFrame;
+                cumulativeWordsBefore += wordsThisFrame;
+            }
+            // total words per frame average fallback
+            uint wordsPerFrame = (bitsPerFrame + 31) / 32;
+
+            // Calculate available space for delta data per chunk (first chunk may include raw first frame)
+            uint availableSpaceForDeltasFirst = (uint)(maxFileSize - staticOverheadSize);
+            // For subsequent chunks: omit raw_first_frame (if present) and mesh filename to maximize delta space if desired
+            uint staticOverheadAppend = headerSize + bitWidthsSize + firstFrameSize + (uint)meshDataFilenameBytes.Length; // exclude rawFirstFrame if present
+            uint availableSpaceForDeltasAppend = (uint)(maxFileSize - staticOverheadAppend);
             uint deltaStreamWordSize = sizeof(uint);
             
             // Calculate how to split the delta stream
             uint totalDeltaWords = (uint)anim.delta_stream.Length;
-            uint maxDeltaWordsPerChunk = availableSpaceForDeltas / deltaStreamWordSize;
+            uint totalDeltaFrames = (anim.num_frames > 0) ? (anim.num_frames - 1) : 0;
+            if (wordsPerFrame == 0) wordsPerFrame = 1; // avoid div by zero for degenerate cases
+            // Use append available space as baseline for frames-per-chunk (since most chunks will be append-like)
+            uint maxDeltaWordsPerChunk = availableSpaceForDeltasAppend / deltaStreamWordSize;
             
             if (maxDeltaWordsPerChunk == 0)
             {
                 throw new System.InvalidOperationException(
                     $"ERROR: Cannot fit any delta data within {maxFileSizeKB}KB limit! Static overhead is {staticOverheadSize} bytes, " +
-                    $"leaving only {availableSpaceForDeltas} bytes for deltas, but need at least {deltaStreamWordSize} bytes per delta word.");
+                    $"leaving only {availableSpaceForDeltasAppend} bytes for deltas (append-case), but need at least {deltaStreamWordSize} bytes per delta word.");
             }
             
-            int numberOfChunks = UnityEngine.Mathf.CeilToInt((float)totalDeltaWords / maxDeltaWordsPerChunk);
+            // If maxDeltaWordsPerChunk is zero, ensure at least one word per chunk
+            if (maxDeltaWordsPerChunk == 0) maxDeltaWordsPerChunk = 1;
+            // Use the precomputed per-frame word counts to figure the best frame count that fits in a chunk
+            // We'll derive chunking by summing wordsPerDeltaFrame per-frame values until we reach maxDeltaWordsPerChunk
+            uint deltaFramesPerAppendChunk = 0;
+            if (totalDeltaFrames > 0)
+            {
+                uint acc = 0;
+                for (uint i = 0; i < totalDeltaFrames; ++i)
+                {
+                    acc += wordsPerDeltaFrame[i];
+                    if (acc >= maxDeltaWordsPerChunk)
+                    {
+                        deltaFramesPerAppendChunk = i + 1;
+                        break;
+                    }
+                }
+                if (deltaFramesPerAppendChunk == 0)
+                {
+                    // If we didn't reach the threshold, use all remaining frames
+                    deltaFramesPerAppendChunk = totalDeltaFrames;
+                }
+            }
+            else
+            {
+                deltaFramesPerAppendChunk = 1;
+            }
+            if (deltaFramesPerAppendChunk == 0) deltaFramesPerAppendChunk = 1; // ensure at least one delta frame per chunk
+            int numberOfChunks = UnityEngine.Mathf.CeilToInt((float)totalDeltaFrames / (float)deltaFramesPerAppendChunk);
             
             UnityEngine.Debug.Log($"Splitting RAT animation into {numberOfChunks} chunks (max {maxFileSizeKB}KB each):");
             
+            uint nextStartDfIndex = 0;
+            // Precompute prefix word sums for fast start offsets
+            uint[] prefixWords = new uint[totalDeltaFrames + 1]; // prefixWords[frame] = words used by frames [0 .. frame-1]
+            uint running = 0;
+            prefixWords[0] = 0;
+            for (uint f = 0; f < totalDeltaFrames; ++f)
+            {
+                running += wordsPerDeltaFrame[f];
+                prefixWords[f + 1] = running;
+            }
             for (int chunkIndex = 0; chunkIndex < numberOfChunks; chunkIndex++)
             {
-                uint startDeltaWord = (uint)(chunkIndex * maxDeltaWordsPerChunk);
-                uint endDeltaWord = System.Math.Min(startDeltaWord + maxDeltaWordsPerChunk, totalDeltaWords);
-                uint chunkDeltaWords = endDeltaWord - startDeltaWord;
+                perChunkProgress?.Invoke(chunkIndex + 1, numberOfChunks);
+                uint startDeltaFrame = nextStartDfIndex; // zero-based delta frame index
+                uint remainingDeltaFrames = totalDeltaFrames - startDeltaFrame;
+                uint chunkDeltaFrames = 0;
+                if (chunkIndex == 0)
+                {
+                    uint deltaWordsFirst = availableSpaceForDeltasFirst / deltaStreamWordSize;
+                    // Determine how many frames fit by summing per-frame words
+                    uint accWords = 0;
+                    uint framesFits = 0;
+                    for (uint ff = startDeltaFrame; ff < startDeltaFrame + remainingDeltaFrames; ++ff)
+                    {
+                        if (ff >= totalDeltaFrames) break;
+                        accWords += wordsPerDeltaFrame[ff];
+                        if (accWords > deltaWordsFirst) break;
+                        framesFits++;
+                    }
+                    if (framesFits == 0) framesFits = 1;
+                    chunkDeltaFrames = (uint)System.Math.Min(remainingDeltaFrames, framesFits);
+                }
+                else
+                {
+                    chunkDeltaFrames = (uint)System.Math.Min(remainingDeltaFrames, deltaFramesPerAppendChunk);
+                }
+                // chunk covers frames: base frame index = startDeltaFrame, dest frames = startDeltaFrame+1 .. startDeltaFrame + chunkDeltaFrames
+                // start and lengths in words using exact per-frame word counts
+                uint startDeltaWord = prefixWords[startDeltaFrame];
+                // Sum per-frame words for this chunk
+                uint chunkDeltaWords = 0;
+                for (uint f = startDeltaFrame; f < startDeltaFrame + chunkDeltaFrames; ++f)
+                {
+                    if (f < totalDeltaFrames) chunkDeltaWords += wordsPerDeltaFrame[f];
+                }
                 
-                var chunkAnim = new CompressedAnimation
+                    var chunkAnim = new CompressedAnimation
                 {
                     num_vertices = anim.num_vertices,
                     num_indices = anim.num_indices,
-                    num_frames = anim.num_frames, // This should reflect the frames in the chunk, but the header needs total frames.
+                        // num_frames: for first chunk we write global animation frame count; for appended chunks write local chunk length
+                            num_frames = (chunkIndex == 0) ? anim.num_frames : (chunkDeltaFrames + 1),
                     min_x = anim.min_x, max_x = anim.max_x,
                     min_y = anim.min_y, max_y = anim.max_y,
                     min_z = anim.min_z, max_z = anim.max_z,
@@ -505,10 +892,39 @@ namespace Rat
                     mesh_data_filename = Path.GetFileName(meshDataFilename)
                 };
                 
-                if (chunkDeltaWords > 0)
+                if (chunkDeltaWords > 0 && anim.delta_stream != null && anim.delta_stream.Length > 0)
                 {
-                    chunkAnim.delta_stream = new uint[chunkDeltaWords];
-                    System.Array.Copy(anim.delta_stream, startDeltaWord, chunkAnim.delta_stream, 0, chunkDeltaWords);
+                    int totalDeltaWordsInt = anim.delta_stream.Length;
+                    long startLong = Math.Min((long)startDeltaWord, (long)totalDeltaWordsInt);
+                    if (startLong >= totalDeltaWordsInt)
+                    {
+                        UnityEngine.Debug.LogWarning($"RAT: computed startDeltaWord {startDeltaWord} >= totalDeltaWords {totalDeltaWordsInt}, writing empty delta stream for chunk.");
+                        chunkAnim.delta_stream = new uint[0];
+                    }
+                    else
+                    {
+                        int available = totalDeltaWordsInt - (int)startLong;
+                        int copyWords = (int)Math.Min((long)chunkDeltaWords, (long)available);
+                        if (copyWords < chunkDeltaWords)
+                        {
+                            UnityEngine.Debug.LogWarning($"RAT: chunk copy length clamped from {chunkDeltaWords} to {copyWords} due to available source words ({available}).");
+                        }
+                        chunkAnim.delta_stream = new uint[copyWords];
+                        System.Array.Copy(anim.delta_stream, (int)startLong, chunkAnim.delta_stream, 0, copyWords);
+                        // Update chunkDeltaWords to reflect actual copied words
+                        chunkDeltaWords = (uint)copyWords;
+                        // Recompute actual chunkDeltaFrames in case the copied words were less than expected
+                        uint actualChunkDeltaFrames = 0;
+                        uint wordsConsumedCheck = 0;
+                        for (uint ff = startDeltaFrame; ff < startDeltaFrame + chunkDeltaFrames && ff < totalDeltaFrames; ++ff)
+                        {
+                            uint w = wordsPerDeltaFrame[ff];
+                            if (wordsConsumedCheck + w > chunkDeltaWords) break;
+                            wordsConsumedCheck += w;
+                            actualChunkDeltaFrames++;
+                        }
+                        chunkDeltaFrames = actualChunkDeltaFrames;
+                    }
                 }
                 else
                 {
@@ -519,6 +935,60 @@ namespace Rat
                     ? $"{baseFilename}.rat"
                     : $"{baseFilename}_part{chunkIndex + 1:D2}of{numberOfChunks:D2}.rat";
                 
+                // Prepare chunk-specific metadata
+                // For non-first chunks, set the chunk header first_frame to the quantized frame at chunk start
+                if (chunkIndex == 0)
+                {
+                    // First chunk keeps anim.first_frame and optionally raw_first_frame and mesh filename
+                }
+                else
+                {
+                    // Try to seed from precomputed quantized frames if available (most accurate)
+                    if (anim.quantized_frames != null && anim.quantized_frames.Length > startDeltaFrame)
+                    {
+                        chunkAnim.first_frame = anim.quantized_frames[startDeltaFrame];
+                    }
+                    else
+                    {
+                        // Fallback: reconstruct by applying deltas from global first frame up to startDeltaFrame
+                        var temp = new VertexU8[chunkAnim.num_vertices];
+                        Array.Copy(anim.first_frame, temp, (int)anim.num_vertices);
+                        if (startDeltaFrame > 0 && anim.delta_stream != null && anim.delta_stream.Length > 0)
+                        {
+                            // Read deltas from the global stream up to startDeltaFrame
+                            var reader = new BitstreamReader(anim.delta_stream);
+                            for (uint f = 0; f < startDeltaFrame; ++f)
+                            {
+                                for (int v = 0; v < temp.Length; ++v)
+                                {
+                                    int bx = anim.bit_widths_x[v];
+                                    int by = anim.bit_widths_y[v];
+                                    int bz = anim.bit_widths_z[v];
+                                    int rawx = (int)reader.Read(bx);
+                                    int dx = SignExtendLocal((uint)rawx, bx);
+                                    int rawy = (int)reader.Read(by);
+                                    int dy = SignExtendLocal((uint)rawy, by);
+                                    int rawz = (int)reader.Read(bz);
+                                    int dz = SignExtendLocal((uint)rawz, bz);
+                                    temp[v].x = (byte)(temp[v].x + dx);
+                                    temp[v].y = (byte)(temp[v].y + dy);
+                                    temp[v].z = (byte)(temp[v].z + dz);
+                                }
+                            }
+                        }
+                        chunkAnim.first_frame = temp;
+                    }
+                    // Do not include raw_first_frame or mesh filename on appended chunks to save space
+                    chunkAnim.isFirstFrameRaw = false;
+                    chunkAnim.first_frame_raw = null;
+                    chunkAnim.mesh_data_filename = string.Empty;
+                }
+
+                // Ensure num_frames header reflects actual copied chunk frames
+                if (chunkIndex != 0)
+                {
+                    chunkAnim.num_frames = (chunkDeltaFrames + 1);
+                }
                 using (var stream = new FileStream(filename, FileMode.Create))
                 {
                     WriteRatFileV3(stream, chunkAnim, chunkAnim.mesh_data_filename);
@@ -526,6 +996,117 @@ namespace Rat
                 
                 createdFiles.Add(filename);
                 UnityEngine.Debug.Log($"  Chunk {chunkIndex + 1}: {filename} ({new FileInfo(filename).Length} bytes)");
+                
+                // Optional: Validate written chunk by reading it back and comparing decompressed frames
+                if (processedFrames != null && anim.quantized_frames != null)
+                {
+                    try
+                    {
+                        // To validate the chunk, create a temporary anim seeded with the quantized frame at startDeltaFrame
+                        var validationAnim = new CompressedAnimation
+                        {
+                            num_vertices = chunkAnim.num_vertices,
+                            num_frames = chunkAnim.num_frames,
+                            num_indices = chunkAnim.num_indices,
+                            min_x = chunkAnim.min_x, max_x = chunkAnim.max_x,
+                            min_y = chunkAnim.min_y, max_y = chunkAnim.max_y,
+                            min_z = chunkAnim.min_z, max_z = chunkAnim.max_z,
+                            bit_widths_x = chunkAnim.bit_widths_x,
+                            bit_widths_y = chunkAnim.bit_widths_y,
+                            bit_widths_z = chunkAnim.bit_widths_z,
+                            delta_stream = chunkAnim.delta_stream,
+                            first_frame = new VertexU8[chunkAnim.num_vertices]
+                        };
+                        // Seed validationAnim.first_frame from global quantized frames at the chunk start
+                        if (chunkAnim.first_frame != null && chunkAnim.first_frame.Length > 0)
+                        {
+                            var src = chunkAnim.first_frame;
+                            int srcLen = src.Length;
+                            int dstLen = validationAnim.first_frame.Length;
+                            int copyLen = Math.Min((int)chunkAnim.num_vertices, Math.Min(srcLen, dstLen));
+                            Array.Copy(src, validationAnim.first_frame, copyLen);
+                        }
+                        else if (anim.quantized_frames != null && anim.quantized_frames.Length > startDeltaFrame)
+                        {
+                            var src = anim.quantized_frames[startDeltaFrame];
+                            int srcLen = src.Length;
+                            int dstLen = validationAnim.first_frame.Length;
+                            int copyLen = Math.Min((int)chunkAnim.num_vertices, Math.Min(srcLen, dstLen));
+                            Array.Copy(src, validationAnim.first_frame, copyLen);
+                        }
+                        var ctxChunk = Core.CreateDecompressionContext(validationAnim);
+                        uint baseFrameIndex = startDeltaFrame; // base frame index in global processedFrames
+                        float chunkMaxError = 0f;
+                        int chunkMaxErrorVertexIndex = -1;
+                        UnityEngine.Vector3 chunkMaxExpected = UnityEngine.Vector3.zero;
+                        UnityEngine.Vector3 chunkMaxActual = UnityEngine.Vector3.zero;
+                        // Check only the first frame (decompressing all frames can block the editor on large animations)
+                        uint maxValidateFrames = (enableHeavyValidation? validationAnim.num_frames : 1u);
+                        for (uint local = 0; local < maxValidateFrames && local < validationAnim.num_frames; ++local)
+                        {
+                            Core.DecompressToFrame(ctxChunk, validationAnim, local);
+                            // Compare each vertex
+                            int compareFrameIndex = (int)(baseFrameIndex + local);
+                            if (compareFrameIndex >= processedFrames.Count) break; // outside of provided frames
+                            var expectedFrame = processedFrames[compareFrameIndex];
+                            for (int v = 0; v < validationAnim.num_vertices; ++v)
+                            {
+                                var q = ctxChunk.current_positions[v];
+                                float x = validationAnim.min_x + (q.x / 255f) * (validationAnim.max_x - validationAnim.min_x);
+                                float y = validationAnim.min_y + (q.y / 255f) * (validationAnim.max_y - validationAnim.min_y);
+                                float z = validationAnim.min_z + (q.z / 255f) * (validationAnim.max_z - validationAnim.min_z);
+                                var epos = expectedFrame[v];
+                                float err = UnityEngine.Vector3.Distance(new UnityEngine.Vector3(x, y, z), epos);
+                                if (err > chunkMaxError) {
+                                    chunkMaxError = err;
+                                    chunkMaxErrorVertexIndex = v;
+                                    chunkMaxExpected = epos;
+                                    chunkMaxActual = new UnityEngine.Vector3(x, y, z);
+                                }
+                            }
+                        }
+                        // Compute a dynamic validation tolerance based on the quantization step size
+                        float stepX = (validationAnim.max_x - validationAnim.min_x) / 255f;
+                        float stepY = (validationAnim.max_y - validationAnim.min_y) / 255f;
+                        float stepZ = (validationAnim.max_z - validationAnim.min_z) / 255f;
+                        // Worst-case Euclidean error for a single-axis rounding is sqrt((step/2)^2*3).
+                        float quantizationTolerance = UnityEngine.Mathf.Sqrt((stepX * 0.5f) * (stepX * 0.5f) + (stepY * 0.5f) * (stepY * 0.5f) + (stepZ * 0.5f) * (stepZ * 0.5f));
+                        // Add a small safety margin and a conservative minimum tolerance
+                        float validationTolerance = UnityEngine.Mathf.Max(quantizationTolerance * 1.2f, 0.01f);
+                        UnityEngine.Debug.Log($"RAT Validation: tolerance={validationTolerance:F6} (stepX={stepX:F6} stepY={stepY:F6} stepZ={stepZ:F6})");
+                        if (chunkMaxError > validationTolerance)
+                        {
+                            UnityEngine.Debug.LogError($"RAT Validation FAILED for chunk {chunkIndex + 1}: max error {chunkMaxError:F6} exceeds tolerance {validationTolerance:F6}. startDeltaFrame={startDeltaFrame}, chunkFrames={chunkDeltaFrames}");
+                            if (chunkMaxErrorVertexIndex >= 0)
+                            {
+                                UnityEngine.Debug.LogError($"Validation fail: vertexIndex={chunkMaxErrorVertexIndex}, expected={chunkMaxExpected}, actual={chunkMaxActual}, diff={(chunkMaxActual - chunkMaxExpected)}");
+                            }
+                            try
+                            {
+                                if (validationAnim.first_frame != null && validationAnim.first_frame.Length > 0)
+                                {
+                                    var qf = validationAnim.first_frame[0];
+                                    var globalF = (anim.quantized_frames != null && anim.quantized_frames.Length > startDeltaFrame) ? anim.quantized_frames[startDeltaFrame][0] : validationAnim.first_frame[0];
+                                    UnityEngine.Debug.LogError($"Chunk seed sample: chunk.first_frame[0] = ({qf.x},{qf.y},{qf.z}), global.first_frame_at_start = ({globalF.x},{globalF.y},{globalF.z})");
+                                }
+                            }
+                            catch (System.Exception ex)
+                            {
+                                UnityEngine.Debug.LogWarning($"Validation debug: failed to print first_frame sample: {ex.Message}");
+                            }
+                        }
+                        else
+                        {
+                            UnityEngine.Debug.Log($"RAT Validation OK for chunk {chunkIndex + 1}: max error {chunkMaxError:F6} (tolerance {validationTolerance:F6}). startDeltaFrame={startDeltaFrame}, chunkFrames={chunkDeltaFrames}");
+                        }
+                    }
+                    catch (System.Exception e)
+                    {
+                        UnityEngine.Debug.LogWarning($"ExportValidation: Failed to validate chunk {chunkIndex + 1}: {e.Message}");
+                    }
+                }
+                // Advance the start index for the next chunk
+                nextStartDfIndex += chunkDeltaFrames;
             }
             
             return createdFiles;
@@ -716,12 +1297,18 @@ namespace Rat
                 isFirstFrameRaw = preserveFirstFrame
             };
 
-            Array.Copy(quantizedFrames[0], anim.first_frame, numVertices);
+            Array.Copy(quantizedFrames[0], anim.first_frame, (int)numVertices);
+
+            // Keep quantized frames around for writer chunking and validation
+            anim.quantized_frames = quantizedFrames;
+
+            // Keep quantized frames around for writer chunking and validation
+            anim.quantized_frames = quantizedFrames;
 
             if (preserveFirstFrame)
             {
                 anim.first_frame_raw = new UnityEngine.Vector3[numVertices];
-                Array.Copy(rawFrames[0], anim.first_frame_raw, numVertices);
+                Array.Copy(rawFrames[0], anim.first_frame_raw, (int)numVertices);
             }
 
             if (numFrames > 1)
@@ -766,6 +1353,206 @@ namespace Rat
             
             UnityEngine.Debug.Log($"Final RAT bounds: Min({anim.min_x:F3}, {anim.min_y:F3}, {anim.min_z:F3}) Max({anim.max_x:F3}, {anim.max_y:F3}, {anim.max_z:F3})");
             UnityEngine.Debug.Log($"Quantization range: X({range.x:F3}) Y({range.y:F3}) Z({range.z:F3})");
+            
+            return anim;
+        }
+
+        /// <summary>
+        /// Compress animation data with explicit bounds (optimized for particle systems).
+        /// This version uses provided bounds instead of calculating from all vertices,
+        /// allowing exclusion of inactive/collapsed particles from bounds calculation.
+        /// </summary>
+        public static CompressedAnimation CompressFromFramesWithBounds(
+            List<UnityEngine.Vector3[]> rawFrames,
+            UnityEngine.Mesh sourceMesh,
+            UnityEngine.Vector2[] staticUVs,
+            UnityEngine.Color[] staticColors,
+            UnityEngine.Vector3 minBounds,
+            UnityEngine.Vector3 maxBounds,
+            bool preserveFirstFrame = false)
+        {
+            if (rawFrames == null || rawFrames.Count == 0) return null;
+            if (!ValidateMeshForRAT(sourceMesh)) return null;
+
+            uint numVertices = (uint)sourceMesh.vertexCount;
+            uint numFrames = (uint)rawFrames.Count;
+            uint numIndices = (uint)sourceMesh.triangles.Length;
+
+            var sourceIndices = sourceMesh.triangles;
+            
+            UnityEngine.Debug.Log($"Compression using explicit bounds: Min({minBounds.x:F3}, {minBounds.y:F3}, {minBounds.z:F3}) Max({maxBounds.x:F3}, {maxBounds.y:F3}, {maxBounds.z:F3})");
+
+            // Quantize ALL frames to 8-bit using the provided bounds
+            var quantizedFrames = new VertexU8[numFrames][];
+            var range = maxBounds - minBounds;
+            if (range.x == 0) range.x = 1;
+            if (range.y == 0) range.y = 1;
+            if (range.z == 0) range.z = 1;
+
+            for (int f = 0; f < numFrames; f++)
+            {
+                quantizedFrames[f] = new VertexU8[numVertices];
+                for (int v = 0; v < numVertices; v++)
+                {
+                    // Map vertex from world space into 0-255 quantized space using bounds
+                    quantizedFrames[f][v].x = (byte)UnityEngine.Mathf.RoundToInt(255 * UnityEngine.Mathf.Clamp01((rawFrames[f][v].x - minBounds.x) / range.x));
+                    quantizedFrames[f][v].y = (byte)UnityEngine.Mathf.RoundToInt(255 * UnityEngine.Mathf.Clamp01((rawFrames[f][v].y - minBounds.y) / range.y));
+                    quantizedFrames[f][v].z = (byte)UnityEngine.Mathf.RoundToInt(255 * UnityEngine.Mathf.Clamp01((rawFrames[f][v].z - minBounds.z) / range.z));
+                }
+            }
+
+            // Handle UVs, Colors, and Indices
+            var uvs = new VertexUV[numVertices];
+            var colors = new VertexColor[numVertices];
+
+            if (staticUVs != null && staticUVs.Length == numVertices)
+            {
+                for (int v = 0; v < numVertices; v++)
+                {
+                    uvs[v].u = staticUVs[v].x;
+                    uvs[v].v = staticUVs[v].y;
+                }
+            }
+            else
+            {
+                var sourceUVs = sourceMesh.uv;
+                for (int v = 0; v < numVertices; v++)
+                {
+                    if (v < sourceUVs.Length)
+                    {
+                        uvs[v].u = sourceUVs[v].x;
+                        uvs[v].v = sourceUVs[v].y;
+                    }
+                    else
+                    {
+                        uvs[v].u = 0;
+                        uvs[v].v = 0;
+                    }
+                }
+            }
+
+            if (staticColors != null && staticColors.Length == numVertices)
+            {
+                for (int v = 0; v < numVertices; v++)
+                {
+                    colors[v].r = staticColors[v].r;
+                    colors[v].g = staticColors[v].g;
+                    colors[v].b = staticColors[v].b;
+                    colors[v].a = staticColors[v].a;
+                }
+            }
+            else
+            {
+                var sourceColors = sourceMesh.colors;
+                for (int v = 0; v < numVertices; v++)
+                {
+                    if (v < sourceColors.Length)
+                    {
+                        colors[v].r = sourceColors[v].r;
+                        colors[v].g = sourceColors[v].g;
+                        colors[v].b = sourceColors[v].b;
+                        colors[v].a = sourceColors[v].a;
+                    }
+                    else
+                    {
+                        colors[v].r = 1;
+                        colors[v].g = 1;
+                        colors[v].b = 1;
+                        colors[v].a = 1;
+                    }
+                }
+            }
+
+            var indices = new ushort[numIndices];
+            for (int i = 0; i < numIndices; i++)
+            {
+                indices[i] = (ushort)sourceIndices[i];
+            }
+
+            // Calculate per-vertex bit widths for delta encoding
+            var bitWidthsX = new byte[numVertices];
+            var bitWidthsY = new byte[numVertices];
+            var bitWidthsZ = new byte[numVertices];
+
+            for (int v = 0; v < numVertices; v++)
+            {
+                byte maxBitsX = 0, maxBitsY = 0, maxBitsZ = 0;
+                for (int f = 1; f < numFrames; f++)
+                {
+                    int dx = quantizedFrames[f][v].x - quantizedFrames[f - 1][v].x;
+                    int dy = quantizedFrames[f][v].y - quantizedFrames[f - 1][v].y;
+                    int dz = quantizedFrames[f][v].z - quantizedFrames[f - 1][v].z;
+
+                    byte bitsX = BitsForDelta(dx);
+                    byte bitsY = BitsForDelta(dy);
+                    byte bitsZ = BitsForDelta(dz);
+
+                    if (bitsX > maxBitsX) maxBitsX = bitsX;
+                    if (bitsY > maxBitsY) maxBitsY = bitsY;
+                    if (bitsZ > maxBitsZ) maxBitsZ = bitsZ;
+                }
+                bitWidthsX[v] = maxBitsX;
+                bitWidthsY[v] = maxBitsY;
+                bitWidthsZ[v] = maxBitsZ;
+            }
+
+            // Create compressed animation
+            var anim = new CompressedAnimation
+            {
+                num_vertices = numVertices,
+                num_frames = numFrames,
+                num_indices = numIndices,
+                uvs = uvs,
+                colors = colors,
+                indices = indices,
+                first_frame = quantizedFrames[0],
+                quantized_frames = quantizedFrames,
+                isFirstFrameRaw = preserveFirstFrame,
+                min_x = minBounds.x,
+                min_y = minBounds.y,
+                min_z = minBounds.z,
+                max_x = maxBounds.x,
+                max_y = maxBounds.y,
+                max_z = maxBounds.z,
+                bit_widths_x = bitWidthsX,
+                bit_widths_y = bitWidthsY,
+                bit_widths_z = bitWidthsZ
+            };
+
+            if (preserveFirstFrame)
+            {
+                anim.first_frame_raw = rawFrames[0];
+            }
+
+            if (numFrames > 1)
+            {
+                var bitstream = new BitstreamWriter();
+                for (int f = 1; f < numFrames; f++)
+                {
+                    for (int v = 0; v < numVertices; v++)
+                    {
+                        int dx = quantizedFrames[f][v].x - quantizedFrames[f - 1][v].x;
+                        int dy = quantizedFrames[f][v].y - quantizedFrames[f - 1][v].y;
+                        int dz = quantizedFrames[f][v].z - quantizedFrames[f - 1][v].z;
+
+                        uint ux = (uint)dx;
+                        uint uy = (uint)dy;
+                        uint uz = (uint)dz;
+
+                        bitstream.Write(ux, bitWidthsX[v]);
+                        bitstream.Write(uy, bitWidthsY[v]);
+                        bitstream.Write(uz, bitWidthsZ[v]);
+                    }
+                }
+                bitstream.Flush();
+                anim.delta_stream = bitstream.ToArray();
+            }
+            else
+            {
+                anim.delta_stream = Array.Empty<uint>();
+            }
+            
+            UnityEngine.Debug.Log($"Compressed with explicit bounds: range X({range.x:F3}) Y({range.y:F3}) Z({range.z:F3})");
             
             return anim;
         }
@@ -890,12 +1677,12 @@ namespace Rat
                 isFirstFrameRaw = preserveFirstFrame
             };
 
-            Array.Copy(quantizedFrames[0], anim.first_frame, numVertices);
+            Array.Copy(quantizedFrames[0], anim.first_frame, (int)numVertices);
 
             if (preserveFirstFrame)
             {
                 anim.first_frame_raw = new UnityEngine.Vector3[numVertices];
-                Array.Copy(rawFrames[0], anim.first_frame_raw, numVertices);
+                Array.Copy(rawFrames[0], anim.first_frame_raw, (int)numVertices);
             }
 
             if (numFrames > 1)
@@ -975,12 +1762,11 @@ namespace Rat
         /// 
     /// Flow: apply transforms to frames, compress vertex deltas, write RAT/ACT files.
     /// - Transforms are applied to vertices to produce world-space frames
-    /// - If `customTransforms` are provided, they must be specified in world-space: position (world), rotation (world Euler angles in degrees), and scale as world-space (transform.lossyScale)
     /// - Compression uses computed bounds and 8-bit quantization per axis
     /// - RAT files contain bounds, quantized vertices, and delta streams
     /// - ACT files contain mesh data and RAT references (no per-frame transforms)
         /// </summary>
-        public static void ExportAnimation(
+    public static void ExportAnimation(
             string baseFilename,
             List<UnityEngine.Vector3[]> vertexFrames,
             UnityEngine.Mesh sourceMesh,
@@ -991,13 +1777,19 @@ namespace Rat
             int maxFileSizeKB = 64,
             ActorRenderingMode renderingMode = ActorRenderingMode.TextureWithDirectionalLight,
             List<ActorTransformFloat> customTransforms = null,
-            bool flipZ = true)
+            bool flipZ = true,
+            bool skipValidation = false,
+            bool yieldPerChunk = false,
+            System.Action<List<string>> onComplete = null)
         {
             if (vertexFrames == null || vertexFrames.Count == 0)
             {
                 UnityEngine.Debug.LogError("ExportAnimation: No vertex frames provided");
                 return;
             }
+#if UNITY_EDITOR
+            UnityEditor.EditorUtility.DisplayProgressBar("Exporting", "Preparing animation...", 0.05f);
+#endif
 
             // STEP 1: Apply transforms to vertices
             // This converts from local space to world space with all animation baked in
@@ -1080,6 +1872,9 @@ namespace Rat
             var compressed = CompressFromFrames(processedFrames, meshToUse, capturedUVs, capturedColors);
             if (compressed == null)
             {
+#if UNITY_EDITOR
+                UnityEditor.EditorUtility.ClearProgressBar();
+#endif
                 UnityEngine.Debug.LogError("ExportAnimation: Compression failed");
                 return;
             }
@@ -1105,12 +1900,111 @@ namespace Rat
             // Contains: bounds (float) + bit widths + first frame + delta stream
             // ALL vertex animation is baked in, ready for direct rendering
             string baseFilePath = System.IO.Path.Combine(generatedDataPath, baseFilename);
-            var ratFiles = WriteRatFileWithSizeSplitting(baseFilePath, compressed, maxFileSizeKB);
+            // Show progress and run chunk-writing; this may be expensive so keep the user informed
+#if UNITY_EDITOR
+            UnityEditor.EditorUtility.DisplayProgressBar("Exporting", "Writing RAT files...", 0.5f);
+#endif
+            // Local helper to complete validation and ACT creation after RAT files are written (used by chunked writer)
+            void CompleteExportAfterRATs(string baseFilePathInner, CompressedAnimation compressedInner, List<UnityEngine.Vector3[]> processedFramesInner, bool skipValidationInner, List<string> ratFilesInner)
+            {
+                // Validation step (editor/debug): read back the RAT and compare decompressed vertices to expected world-space positions
+                try
+                {
+                    if (!skipValidationInner && ratFilesInner.Count > 0)
+                    {
+                        string firstRat = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(ratFilesInner[0]) ?? "", System.IO.Path.GetFileName(ratFilesInner[0]));
+                        var ratAnim = Core.ReadRatFile(firstRat);
+                        var ctx = Core.CreateDecompressionContext(ratAnim);
+                        Core.DecompressToFrame(ctx, ratAnim, 0);
+                        // Convert decompressed vertices to world-space floats
+                        var decompressed = new UnityEngine.Vector3[ratAnim.num_vertices];
+                        for (int i = 0; i < ratAnim.num_vertices; i++)
+                        {
+                            var v = ratAnim.first_frame[i];
+                            float x = ratAnim.min_x + (v.x / 255f) * (ratAnim.max_x - ratAnim.min_x);
+                            float y = ratAnim.min_y + (v.y / 255f) * (ratAnim.max_y - ratAnim.min_y);
+                            float z = ratAnim.min_z + (v.z / 255f) * (ratAnim.max_z - ratAnim.min_z);
+                            decompressed[i] = new UnityEngine.Vector3(x, y, z);
+                        }
+                        // Compare to expected from processedFramesInner[0]
+                        float maxError = 0f;
+                        var expected = processedFramesInner[0];
+                        int count = System.Math.Min(expected.Length, decompressed.Length);
+                        for (int i = 0; i < count; i++)
+                        {
+                            float e = UnityEngine.Vector3.Distance(expected[i], decompressed[i]);
+                            maxError = System.Math.Max(maxError, e);
+                        }
+                        UnityEngine.Debug.Log($"ExportValidation: Decompressed first frame max error {maxError:F6} units (after quantization)");
+                    }
+                }
+                catch (System.Exception e)
+                {
+                    UnityEngine.Debug.LogWarning($"ExportValidation: Validation failed - {e.Message}");
+                }
+                finally
+                {
+#if UNITY_EDITOR
+                    UnityEditor.EditorUtility.ClearProgressBar();
+#endif
+                }
+
+                // STEP 4: Create ACT file - contains mesh + RAT references
+                var actorDataInner = new ActorAnimationData();
+                actorDataInner.framerate = framerate;
+                actorDataInner.ratFilePaths.AddRange(ratFilesInner.ConvertAll(System.IO.Path.GetFileName));
+                actorDataInner.meshUVs = capturedUVs ?? (meshToUse != null ? meshToUse.uv : sourceMesh.uv);
+                actorDataInner.meshColors = capturedColors ?? (meshToUse != null ? meshToUse.colors : sourceMesh.colors);
+                actorDataInner.meshIndices = (meshToUse != null ? meshToUse.triangles : sourceMesh.triangles);
+                actorDataInner.textureFilename = cleanTextureFilename;
+                string actFilePathInner = System.IO.Path.Combine(generatedDataPath, $"{baseFilename}.act");
+                Actor.SaveActorData(actFilePathInner, actorDataInner, renderingMode, embedMeshData: true);
+            }
+
+            if (yieldPerChunk)
+            {
+                // Use the chunked writer; perform validation/act creation in the completion callback
+                WriteRatFileWithSizeSplittingChunked(baseFilePath, compressed, maxFileSizeKB, skipValidation ? null : processedFrames,
+                    (done, total) => {
+#if UNITY_EDITOR
+                        float progress = 0.5f + 0.4f * (done / (float)System.Math.Max(1, total));
+                        UnityEditor.EditorUtility.DisplayProgressBar("Exporting", $"Writing RAT files... ({done}/{total})", progress);
+                        #endif
+                    },
+                    (fileList) => {
+                        // Continue with validation and ACT creation on the main thread after chunks are written
+                        try
+                        {
+                            CompleteExportAfterRATs(baseFilePath, compressed, processedFrames, skipValidation, fileList);
+                            onComplete?.Invoke(fileList);
+                        }
+                        catch (System.Exception e)
+                        {
+                            UnityEngine.Debug.LogError($"ExportAnimation: error during post-chunk completion: {e.Message}\n{e}");
+                        }
+                        finally
+                        {
+                            #if UNITY_EDITOR
+                            UnityEditor.EditorUtility.ClearProgressBar();
+                            #endif
+                        }
+                    });
+                return;
+            }
+#if UNITY_EDITOR
+            var ratFiles = WriteRatFileWithSizeSplitting(baseFilePath, compressed, maxFileSizeKB, skipValidation ? null : processedFrames,
+                (done, total) => {
+                    float progress = 0.5f + 0.4f * (done / (float)System.Math.Max(1, total));
+                    UnityEditor.EditorUtility.DisplayProgressBar("Exporting", $"Writing RAT files... ({done}/{total})", progress);
+                });
+#else
+            var ratFiles = WriteRatFileWithSizeSplitting(baseFilePath, compressed, maxFileSizeKB, skipValidation ? null : processedFrames);
+#endif
 
             // Validation step (editor/debug): read back the RAT and compare decompressed vertices to expected world-space positions
             try
             {
-                if (ratFiles.Count > 0)
+                if (!skipValidation && ratFiles.Count > 0)
                 {
                     string firstRat = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(ratFiles[0]) ?? "", System.IO.Path.GetFileName(ratFiles[0]));
                     var ratAnim = Core.ReadRatFile(firstRat);
@@ -1142,6 +2036,13 @@ namespace Rat
             {
                 UnityEngine.Debug.LogWarning($"ExportValidation: Validation failed - {e.Message}");
             }
+            finally
+            {
+#if UNITY_EDITOR
+                UnityEditor.EditorUtility.ClearProgressBar();
+#endif
+            }
+            
 
             // STEP 4: Create ACT file
             // Contains: mesh data (UVs, colors, indices) + RAT file references
@@ -1167,20 +2068,7 @@ namespace Rat
         }
     }
 
-    /// <summary>
-    /// Material and rendering mode options for Actor rendering
-    /// </summary>
-    public enum ActorRenderingMode
-    {
-        VertexColoursOnly,
-        VertexColoursWithDirectionalLight,
-        VertexColoursWithVertexLighting,
-        TextureOnly,
-        TextureAndVertexColours,
-        TextureWithDirectionalLight,
-        TextureAndVertexColoursAndDirectionalLight,
-        MatCap
-    }
+    // ActorRenderingMode enum moved into Rat namespace to be available as Rat.ActorRenderingMode.
 
     /// <summary>
     /// Floating-point transform data used during recording (before compression)
@@ -1190,8 +2078,7 @@ namespace Rat
     {
         public UnityEngine.Vector3 position;        // World position (represents model center)
         public UnityEngine.Vector3 rotation;        // World rotation (Euler angles in degrees)
-    // World scale - this stores the effective world-space scale (transform.lossyScale) as recorded.
-    public UnityEngine.Vector3 scale;           // World scale (lossyScale)
+        public UnityEngine.Vector3 scale;           // World scale
         public uint rat_file_index;     // Index into the RAT file list (0-based)
         public uint rat_local_frame;    // Frame index within the specific RAT file
     }

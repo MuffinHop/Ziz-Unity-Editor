@@ -63,20 +63,7 @@ public class ActorAnimationData
     }
 }
 
-/// <summary>
-/// Material and rendering mode options for Actor rendering
-/// </summary>
-public enum ActorRenderingMode
-{
-    VertexColoursOnly,
-    VertexColoursWithDirectionalLight,
-    VertexColoursWithVertexLighting,
-    TextureOnly,
-    TextureAndVertexColours,
-    TextureWithDirectionalLight,
-    TextureAndVertexColoursAndDirectionalLight,
-    MatCap
-}
+// Actor rendering mode enum is provided by Rat.ActorRenderingMode
 
 public class Actor : MonoBehaviour
 {
