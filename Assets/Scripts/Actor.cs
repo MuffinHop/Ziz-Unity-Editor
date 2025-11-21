@@ -79,6 +79,22 @@ public class Actor : MonoBehaviour
     public bool recordUntilManualStop = true;
     public bool exportBinary = true; // If true, exports .act and .rat files. If false, only records in memory.
 
+    [Tooltip("Target framerate for recording (e.g. 30 or 60). Set to 0 to capture every frame.")]
+    public float targetFramerate = 30.0f;
+
+    [Header("Compression Settings")]
+    [Tooltip("Maximum bits per axis for delta compression (4-8). Lower = smaller files but less precision. 6 is good for most animations.")]
+    [Range(4, 8)]
+    public int maxBitsPerAxis = 6;  // Default to 6 bits instead of 8
+    
+    [Tooltip("Maximum size per RAT file chunk in KB. Smaller = more files but better for memory-constrained systems.")]
+    [Range(8, 128)]
+    public int maxChunkSizeKB = 32;  // Default to 32KB instead of 64KB
+    
+    [Tooltip("Capture every Nth frame (1 = all frames, 2 = every other frame). Higher = smaller files but choppier animation.")]
+    [Range(1, 4)]
+    public int frameCaptureInterval = 1;  // 1 = capture every frame, 2 = skip every other frame
+
     [Header("Material & Rendering Settings")]
     [Tooltip("Choose the material and lighting mode for this actor")]
     public Rat.ActorRenderingMode renderingMode = Rat.ActorRenderingMode.TextureWithDirectionalLight;
@@ -106,6 +122,7 @@ public class Actor : MonoBehaviour
     // Animation recording data
     private bool isRecording = false;
     private float recordingStartTime;
+    private float lastCaptureTime;
     private uint recordedFrameCount;
     private float animationDuration = 0f;  // Total duration of the animation
     private RatRecorder ratRecorder;
@@ -660,7 +677,29 @@ public class Actor : MonoBehaviour
         
         if (isRecording)
         {
-            CaptureCurrentFrame();
+            bool shouldCapture = false;
+            float rate = GetTargetRecordingFramerate();
+            
+            if (rate > 0)
+            {
+                // Time-based capture
+                if (Time.time - lastCaptureTime >= (1f / rate))
+                {
+                    shouldCapture = true;
+                    lastCaptureTime = Time.time;
+                }
+            }
+            else
+            {
+                // Frame-based capture (every frame, subject to frameCaptureInterval in CaptureCurrentFrame)
+                shouldCapture = true;
+            }
+
+            if (shouldCapture)
+            {
+                CaptureCurrentFrame();
+            }
+            
             recordedFrameCount++;
         }
     }
@@ -848,6 +887,27 @@ public class Actor : MonoBehaviour
     }
     
     /// <summary>
+    /// Determines the target framerate for recording.
+    /// Prioritizes Animator's clip framerate if available, otherwise uses targetFramerate setting.
+    /// </summary>
+    private float GetTargetRecordingFramerate()
+    {
+        // 1. If Animator is present and playing a clip, use that clip's framerate
+        if (animator != null && animator.runtimeAnimatorController != null)
+        {
+            // Check if we can actually get a clip framerate
+            AnimatorClipInfo[] clipInfos = animator.GetCurrentAnimatorClipInfo(0);
+            if (clipInfos.Length > 0 && clipInfos[0].clip != null)
+            {
+                return clipInfos[0].clip.frameRate;
+            }
+        }
+        
+        // 2. Otherwise use the manual setting
+        return targetFramerate;
+    }
+
+    /// <summary>
     /// Starts recording vertex positions every frame
     /// </summary>
     private void StartVertexRecording()
@@ -862,6 +922,12 @@ public class Actor : MonoBehaviour
         
         isRecording = true;
         recordingStartTime = Time.time;
+        
+        // Initialize lastCaptureTime to ensure immediate capture of the first frame
+        float rate = GetTargetRecordingFramerate();
+        float interval = rate > 0 ? (1f / rate) : 0f;
+        lastCaptureTime = Time.time - interval;
+        
         recordedFrameCount = 0;
         
         Debug.Log($"Actor {name} - started vertex recording (capturing world coordinates every frame)");
@@ -872,6 +938,18 @@ public class Actor : MonoBehaviour
     /// </summary>
     private void CaptureCurrentFrame()
     {
+        // Skip frames based on frameCaptureInterval setting ONLY if not using targetFramerate
+        float rate = GetTargetRecordingFramerate();
+        if (rate <= 0)
+        {
+            frameSkipCounter++;
+            if (frameSkipCounter < frameCaptureInterval)
+            {
+                return;
+            }
+            frameSkipCounter = 0;
+        }
+        
         Vector3[] worldVertices = null;
         
         if (skinnedMeshRenderer != null)
@@ -922,26 +1000,40 @@ public class Actor : MonoBehaviour
         
         float recordingDuration = Time.time - recordingStartTime;
         
-        // Use animator framerate if available, otherwise fall back to calculated framerate
-        float exportFramerate = 30f; // default fallback
+        // Determine the framerate to use for export
+        float effectiveFramerate;
+        float targetRate = GetTargetRecordingFramerate();
         
-        if (animator != null && animator.runtimeAnimatorController != null)
+        if (targetRate > 0)
         {
-            exportFramerate = GetCurrentAnimationFrameRate();
-            Debug.Log($"Actor {name} - using animator framerate: {exportFramerate:F1} FPS");
+            // If we were targeting a specific framerate, use that exactly
+            // This avoids floating point jitter and lag artifacts in the recorded framerate
+            effectiveFramerate = targetRate;
         }
         else
         {
-            // Fallback: calculate from actual captured frames
-            float estimatedFramerate = recordedFrameCount / Mathf.Max(recordingDuration, 0.001f);
-            exportFramerate = estimatedFramerate;
-            Debug.Log($"Actor {name} - no animator found, using calculated framerate: {exportFramerate:F1} FPS");
+            // If capturing every frame (rate <= 0), calculate the effective playback framerate
+            effectiveFramerate = capturedVertexFrames.Count / Mathf.Max(recordingDuration, 0.001f);
         }
         
-        Debug.Log($"Actor {name} - recorded {recordedFrameCount} frames over {recordingDuration:F2}s");
+        // ExportCapturedFrames expects a "source" framerate that it will divide by frameCaptureInterval
+        // So we multiply here to counteract that division
+        float exportFramerate = effectiveFramerate * frameCaptureInterval;
+        
+        if (animator != null && animator.runtimeAnimatorController != null)
+        {
+            float animRate = GetCurrentAnimationFrameRate();
+            Debug.Log($"Actor {name} - framerate: {effectiveFramerate:F1} FPS (Animator target was {animRate:F1} FPS)");
+        }
+        else
+        {
+            Debug.Log($"Actor {name} - framerate: {effectiveFramerate:F1} FPS");
+        }
+        
+        Debug.Log($"Actor {name} - recorded {recordedFrameCount} updates over {recordingDuration:F2}s");
         Debug.Log($"Actor {name} - captured {capturedVertexFrames.Count} vertex frames");
         
-        // Export to RAT and ACT files with animator framerate
+        // Export to RAT and ACT files with calculated framerate
         ExportCapturedFrames(exportFramerate);
     }
     
@@ -984,27 +1076,29 @@ public class Actor : MonoBehaviour
         uvs = sourceMesh.uv.Length > 0 ? sourceMesh.uv : new Vector2[sourceMesh.vertexCount];
         colors = sourceMesh.colors.Length > 0 ? sourceMesh.colors : Enumerable.Repeat(Color.white, sourceMesh.vertexCount).ToArray();
         
-        Debug.Log($"Actor {name} - starting export of {capturedVertexFrames.Count} frames...");
+        // Adjust framerate based on frame skip interval
+        float adjustedFramerate = framerate / frameCaptureInterval;
         
-        // Use synchronous export (yieldPerChunk: false doesn't invoke callback, so we don't use it)
-        // Instead, call ExportAnimation without callback and then manually update AnimationData
+        Debug.Log($"Actor {name} - starting export of {capturedVertexFrames.Count} frames at {adjustedFramerate:F1} FPS (capture interval: {frameCaptureInterval})...");
+        
         try
         {
-            Rat.Tool.ExportAnimation(
+            Rat.Tool.ExportAnimationWithMaxBits(
                 baseFilename,
                 capturedVertexFrames,
                 sourceMesh,
                 uvs,
                 colors,
-                framerate,
+                adjustedFramerate,  // Use adjusted framerate
                 textureFilename,
-                64,  // maxFileSizeKB
+                maxChunkSizeKB,  // Use configured chunk size instead of hardcoded 64
                 renderingMode,
-                customTransforms: null,  // Transforms already applied to vertices
-                flipZ: false,  // Already in world space
+                maxBitsPerAxis,  // Apply the configured bit width limit
+                customTransforms: null,
+                flipZ: true, // Enable Z-flipping for OpenGL compatibility
                 skipValidation: false,
-                yieldPerChunk: false,  // Synchronous export
-                onComplete: null  // Don't use callback for sync export
+                yieldPerChunk: false,
+                onComplete: null
             );
             
             // Manually determine created RAT files after export completes
@@ -1040,7 +1134,7 @@ public class Actor : MonoBehaviour
             // Update AnimationData with created files
             AnimationData.ratFilePaths.Clear();
             AnimationData.ratFilePaths.AddRange(ratFiles);
-            AnimationData.framerate = framerate;
+            AnimationData.framerate = adjustedFramerate; // Use the actual playback framerate
             AnimationData.meshUVs = uvs;
             AnimationData.meshColors = colors;
             AnimationData.meshIndices = sourceMesh.triangles;
@@ -1454,4 +1548,6 @@ public class Actor : MonoBehaviour
             Marshal.FreeHGlobal(ptr);
         }
     }
+    
+    private int frameSkipCounter = 0;
 }

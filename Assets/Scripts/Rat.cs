@@ -1476,7 +1476,7 @@ namespace Rat
 
             for (int v = 0; v < numVertices; v++)
             {
-                byte maxBitsX = 0, maxBitsY = 0, maxBitsZ = 0;
+                byte calculatedBitsX = 0, calculatedBitsY = 0, calculatedBitsZ = 0;
                 for (int f = 1; f < numFrames; f++)
                 {
                     int dx = quantizedFrames[f][v].x - quantizedFrames[f - 1][v].x;
@@ -1487,13 +1487,15 @@ namespace Rat
                     byte bitsY = BitsForDelta(dy);
                     byte bitsZ = BitsForDelta(dz);
 
-                    if (bitsX > maxBitsX) maxBitsX = bitsX;
-                    if (bitsY > maxBitsY) maxBitsY = bitsY;
-                    if (bitsZ > maxBitsZ) maxBitsZ = bitsZ;
+                    if (bitsX > calculatedBitsX) calculatedBitsX = bitsX;
+                    if (bitsY > calculatedBitsY) calculatedBitsY = bitsY;
+                    if (bitsZ > calculatedBitsZ) calculatedBitsZ = bitsZ;
                 }
-                bitWidthsX[v] = maxBitsX;
-                bitWidthsY[v] = maxBitsY;
-                bitWidthsZ[v] = maxBitsZ;
+                
+                // No max bits constraints in this overload - use calculated values directly
+                bitWidthsX[v] = calculatedBitsX;
+                bitWidthsY[v] = calculatedBitsY;
+                bitWidthsZ[v] = calculatedBitsZ;
             }
 
             // Create compressed animation
@@ -1629,96 +1631,150 @@ namespace Rat
             // 3. Handle UVs, Colors, and Indices from source mesh
             var uvs = new VertexUV[numVertices];
             var colors = new VertexColor[numVertices];
-            var indices = new ushort[numIndices];
-            
-            var sourceUVs = staticUVs ?? sourceMesh.uv;
-            var sourceColors = staticColors ?? sourceMesh.colors;
 
-            for (int i = 0; i < numVertices; i++) 
+            if (staticUVs != null && staticUVs.Length == numVertices)
             {
-                if(sourceUVs.Length > i) 
+                for (int v = 0; v < numVertices; v++)
                 {
-                    uvs[i] = new VertexUV { 
-                        u = sourceUVs[i].x,
-                        v = sourceUVs[i].y
-                    };
-                }
-                
-                if(sourceColors.Length > i) 
-                {
-                    colors[i] = new VertexColor { 
-                        r = sourceColors[i].r,
-                        g = sourceColors[i].g,
-                        b = sourceColors[i].b,
-                        a = sourceColors[i].a
-                    };
-                }
-                else
-                {
-                    colors[i] = new VertexColor { r = 1, g = 1, b = 1, a = 1 };
+                    uvs[v].u = staticUVs[v].x;
+                    uvs[v].v = staticUVs[v].y;
                 }
             }
-            for (int i = 0; i < numIndices; i++) indices[i] = (ushort)sourceIndices[i];
+            else
+            {
+                var sourceUVs = sourceMesh.uv;
+                for (int v = 0; v < numVertices; v++)
+                {
+                    if (v < sourceUVs.Length)
+                    {
+                        uvs[v].u = sourceUVs[v].x;
+                        uvs[v].v = sourceUVs[v].y;
+                    }
+                    else
+                    {
+                        uvs[v].u = 0;
+                        uvs[v].v = 0;
+                    }
+                }
+            }
 
+            if (staticColors != null && staticColors.Length == numVertices)
+            {
+                for (int v = 0; v < numVertices; v++)
+                {
+                    colors[v].r = staticColors[v].r;
+                    colors[v].g = staticColors[v].g;
+                    colors[v].b = staticColors[v].b;
+                    colors[v].a = staticColors[v].a;
+                }
+            }
+            else
+            {
+                var sourceColors = sourceMesh.colors;
+                for (int v = 0; v < numVertices; v++)
+                {
+                    if (v < sourceColors.Length)
+                    {
+                        colors[v].r = sourceColors[v].r;
+                        colors[v].g = sourceColors[v].g;
+                        colors[v].b = sourceColors[v].b;
+                        colors[v].a = sourceColors[v].a;
+                    }
+                    else
+                    {
+                        colors[v].r = 1;
+                        colors[v].g = 1;
+                        colors[v].b = 1;
+                        colors[v].a = 1;
+                    }
+                }
+            }
+
+            var indices = new ushort[numIndices];
+            for (int i = 0; i < numIndices; i++)
+            {
+                indices[i] = (ushort)sourceIndices[i];
+            }
+
+            // Calculate per-vertex bit widths for delta encoding
+            var bitWidthsX = new byte[numVertices];
+            var bitWidthsY = new byte[numVertices];
+            var bitWidthsZ = new byte[numVertices];
+
+            for (int v = 0; v < numVertices; v++)
+            {
+                byte calculatedBitsX = 0, calculatedBitsY = 0, calculatedBitsZ = 0;
+                for (int f = 1; f < numFrames; f++)
+                {
+                    int dx = quantizedFrames[f][v].x - quantizedFrames[f - 1][v].x;
+                    int dy = quantizedFrames[f][v].y - quantizedFrames[f - 1][v].y;
+                    int dz = quantizedFrames[f][v].z - quantizedFrames[f - 1][v].z;
+
+                    byte bitsX = BitsForDelta(dx);
+                    byte bitsY = BitsForDelta(dy);
+                    byte bitsZ = BitsForDelta(dz);
+
+                    if (bitsX > calculatedBitsX) calculatedBitsX = bitsX;
+                    if (bitsY > calculatedBitsY) calculatedBitsY = bitsY;
+                    if (bitsZ > calculatedBitsZ) calculatedBitsZ = bitsZ;
+                }
+                
+                // No max bits constraints in this overload - use calculated values directly
+                bitWidthsX[v] = calculatedBitsX;
+                bitWidthsY[v] = calculatedBitsY;
+                bitWidthsZ[v] = calculatedBitsZ;
+            }
+
+            // Create compressed animation
             var anim = new CompressedAnimation
             {
                 num_vertices = numVertices,
-                num_indices = numIndices,
                 num_frames = numFrames,
-                min_x = minBounds.x, min_y = minBounds.y, min_z = minBounds.z,
-                max_x = maxBounds.x, max_y = maxBounds.y, max_z = maxBounds.z,
-                first_frame = new VertexU8[numVertices],
+                num_indices = numIndices,
                 uvs = uvs,
                 colors = colors,
                 indices = indices,
-                bit_widths_x = new byte[numVertices],
-                bit_widths_y = new byte[numVertices],
-                bit_widths_z = new byte[numVertices],
-                isFirstFrameRaw = preserveFirstFrame
+                first_frame = quantizedFrames[0],
+                quantized_frames = quantizedFrames,
+                isFirstFrameRaw = preserveFirstFrame,
+                min_x = minBounds.x,
+                min_y = minBounds.y,
+                min_z = minBounds.z,
+                max_x = maxBounds.x,
+                max_y = maxBounds.y,
+                max_z = maxBounds.z,
+                bit_widths_x = bitWidthsX,
+                bit_widths_y = bitWidthsY,
+                bit_widths_z = bitWidthsZ
             };
-
-            Array.Copy(quantizedFrames[0], anim.first_frame, (int)numVertices);
 
             if (preserveFirstFrame)
             {
-                anim.first_frame_raw = new UnityEngine.Vector3[numVertices];
-                Array.Copy(rawFrames[0], anim.first_frame_raw, (int)numVertices);
+                anim.first_frame_raw = rawFrames[0];
             }
 
             if (numFrames > 1)
             {
-                for (int v = 0; v < numVertices; v++)
+                var bitstream = new BitstreamWriter();
+                for (int f = 1; f < numFrames; f++)
                 {
-                    int maxDx = 0, maxDy = 0, maxDz = 0;
-                    for (int f = 1; f < numFrames; f++)
+                    for (int v = 0; v < numVertices; v++)
                     {
                         int dx = quantizedFrames[f][v].x - quantizedFrames[f - 1][v].x;
-                        if (Math.Abs(dx) > maxDx) maxDx = Math.Abs(dx);
                         int dy = quantizedFrames[f][v].y - quantizedFrames[f - 1][v].y;
-                        if (Math.Abs(dy) > maxDy) maxDy = Math.Abs(dy);
                         int dz = quantizedFrames[f][v].z - quantizedFrames[f - 1][v].z;
-                        if (Math.Abs(dz) > maxDz) maxDz = Math.Abs(dz);
-                    }
-                    anim.bit_widths_x[v] = (byte)Math.Min(BitsForDelta(maxDx), maxBitsX);
-                    anim.bit_widths_y[v] = (byte)Math.Min(BitsForDelta(maxDy), maxBitsY);
-                    anim.bit_widths_z[v] = (byte)Math.Min(BitsForDelta(maxDz), maxBitsZ);
-                }
 
-                var writer = new BitstreamWriter();
-                for (uint f = 1; f < numFrames; f++)
-                {
-                    for (uint v = 0; v < numVertices; v++)
-                    {
-                        int dx = quantizedFrames[f][v].x - quantizedFrames[f - 1][v].x;
-                        writer.Write((uint)dx, anim.bit_widths_x[v]);
-                        int dy = quantizedFrames[f][v].y - quantizedFrames[f - 1][v].y;
-                        writer.Write((uint)dy, anim.bit_widths_y[v]);
-                        int dz = quantizedFrames[f][v].z - quantizedFrames[f - 1][v].z;
-                        writer.Write((uint)dz, anim.bit_widths_z[v]);
+                        uint ux = (uint)dx;
+                        uint uy = (uint)dy;
+                        uint uz = (uint)dz;
+
+                        bitstream.Write(ux, bitWidthsX[v]);
+                        bitstream.Write(uy, bitWidthsY[v]);
+                        bitstream.Write(uz, bitWidthsZ[v]);
                     }
                 }
-                writer.Flush();
-                anim.delta_stream = writer.ToArray();
+                bitstream.Flush();
+                anim.delta_stream = bitstream.ToArray();
             }
             else
             {
@@ -1731,33 +1787,6 @@ namespace Rat
         }
 
         /// <summary>
-        /// Convenience method for GLBToRAT-style frame compression.
-        /// Converts Vector3 frames directly to compressed animation.
-        /// </summary>
-        public static CompressedAnimation CompressFramesFromVectors(
-            List<UnityEngine.Vector3[]> allFramesVertices,
-            ushort[] allIndices,
-            UnityEngine.Vector2[] allUVs,
-            UnityEngine.Color[] allColors,
-            string textureFilename = null,
-            string meshDataFilename = null)
-        {
-            if (allFramesVertices == null || allFramesVertices.Count == 0)
-                throw new ArgumentException("No vertex data provided.");
-
-            // Convert to mesh-based compression
-            var dummyMesh = new UnityEngine.Mesh();
-            dummyMesh.vertices = allFramesVertices[0];
-            dummyMesh.triangles = allIndices.Select(i => (int)i).ToArray();
-            dummyMesh.uv = allUVs;
-
-            var compressed = CompressFromFrames(allFramesVertices, dummyMesh, allUVs, allColors);
-            compressed.texture_filename = textureFilename ?? "";
-            compressed.mesh_data_filename = meshDataFilename ?? "";
-            return compressed;
-        }
-
-        /// <summary>
         /// Unified export pipeline: compress vertex animation with transforms baked into vertices, and save as RAT + ACT files.
         /// 
     /// Flow: apply transforms to frames, compress vertex deltas, write RAT/ACT files.
@@ -1766,7 +1795,7 @@ namespace Rat
     /// - RAT files contain bounds, quantized vertices, and delta streams
     /// - ACT files contain mesh data and RAT references (no per-frame transforms)
         /// </summary>
-    public static void ExportAnimation(
+        public static void ExportAnimation(
             string baseFilename,
             List<UnityEngine.Vector3[]> vertexFrames,
             UnityEngine.Mesh sourceMesh,
@@ -2065,6 +2094,140 @@ namespace Rat
             UnityEngine.Debug.Log($"  Vertices: {compressed.num_vertices}, Frames: {compressed.num_frames}");
             UnityEngine.Debug.Log($"  Texture: {cleanTextureFilename}");
             UnityEngine.Debug.Log($"  ACT file: Mesh data + RAT references (all transforms baked into RAT vertex data)");
+        }
+
+        /// <summary>
+        /// Unified export pipeline with maximum bit width constraint for delta compression.
+        /// </summary>
+        public static void ExportAnimationWithMaxBits(
+            string baseFilename,
+            List<UnityEngine.Vector3[]> vertexFrames,
+            UnityEngine.Mesh sourceMesh,
+            UnityEngine.Vector2[] capturedUVs,
+            UnityEngine.Color[] capturedColors,
+            float framerate,
+            string textureFilename = "",
+            int maxFileSizeKB = 64,
+            ActorRenderingMode renderingMode = ActorRenderingMode.TextureWithDirectionalLight,
+            int maxBitsPerAxis = 8,
+            List<ActorTransformFloat> customTransforms = null,
+            bool flipZ = true,
+            bool skipValidation = false,
+            bool yieldPerChunk = false,
+            System.Action<List<string>> onComplete = null)
+        {
+            if (vertexFrames == null || vertexFrames.Count == 0)
+            {
+                UnityEngine.Debug.LogError("ExportAnimationWithMaxBits: No vertex frames provided");
+                onComplete?.Invoke(new List<string>());
+                return;
+            }
+
+            // STEP 1: Apply transforms to vertices (if provided)
+            List<UnityEngine.Vector3[]> processedFrames = vertexFrames;
+            if (customTransforms != null && customTransforms.Count == vertexFrames.Count)
+            {
+                UnityEngine.Debug.Log($"ExportAnimationWithMaxBits: Baking {customTransforms.Count} transform frames into vertex animation...");
+                processedFrames = new List<UnityEngine.Vector3[]>();
+                
+                for (int frameIndex = 0; frameIndex < vertexFrames.Count; frameIndex++)
+                {
+                    var transformData = customTransforms[frameIndex];
+                    
+                    // Build transform matrix: position, rotation, scale
+                    UnityEngine.Matrix4x4 transformMatrix = UnityEngine.Matrix4x4.TRS(
+                        transformData.position,
+                        UnityEngine.Quaternion.Euler(transformData.rotation),
+                        transformData.scale
+                    );
+                    
+                    // Apply to all vertices in this frame
+                    var transformedVertices = new UnityEngine.Vector3[vertexFrames[frameIndex].Length];
+                    for (int vertexIndex = 0; vertexIndex < vertexFrames[frameIndex].Length; vertexIndex++)
+                    {
+                        var v = transformMatrix.MultiplyPoint3x4(vertexFrames[frameIndex][vertexIndex]);
+                        transformedVertices[vertexIndex] = v;
+                    }
+                    
+                    processedFrames.Add(transformedVertices);
+                }
+            }
+
+            // Handle Z-flipping
+            UnityEngine.Mesh meshToUse = sourceMesh;
+            if (flipZ && sourceMesh != null)
+            {
+                // Clone the mesh to avoid mutating the original
+                meshToUse = new UnityEngine.Mesh();
+                meshToUse.vertices = sourceMesh.vertices;
+                meshToUse.uv = sourceMesh.uv;
+                meshToUse.colors = sourceMesh.colors;
+                var tris = sourceMesh.triangles;
+                var reversed = new int[tris.Length];
+                for (int i = 0; i < tris.Length; i += 3)
+                {
+                    // invert winding
+                    reversed[i] = tris[i];
+                    reversed[i + 1] = tris[i + 2];
+                    reversed[i + 2] = tris[i + 1];
+                }
+                meshToUse.triangles = reversed;
+                meshToUse.RecalculateBounds();
+            }
+
+            if (flipZ)
+            {
+                // If processedFrames is still referencing vertexFrames, we need to clone it to avoid modifying original data
+                if (processedFrames == vertexFrames)
+                {
+                    processedFrames = new List<UnityEngine.Vector3[]>(vertexFrames.Count);
+                    foreach (var frame in vertexFrames)
+                    {
+                        processedFrames.Add((UnityEngine.Vector3[])frame.Clone());
+                    }
+                }
+
+                for (int f = 0; f < processedFrames.Count; f++)
+                {
+                    var frame = processedFrames[f];
+                    for (int i = 0; i < frame.Length; i++)
+                    {
+                        var p = frame[i];
+                        p.z = -p.z;
+                        frame[i] = p;
+                    }
+                }
+            }
+
+            // Compress with bit width constraints
+            var compressed = CompressFromFrames(processedFrames, meshToUse, capturedUVs, capturedColors, false, maxBitsPerAxis, maxBitsPerAxis, maxBitsPerAxis);
+            if (compressed == null)
+            {
+                UnityEngine.Debug.LogError("ExportAnimationWithMaxBits: Compression failed");
+                onComplete?.Invoke(new List<string>());
+                return;
+            }
+
+            compressed.texture_filename = textureFilename;
+            compressed.mesh_data_filename = $"{baseFilename}.ratmesh";
+
+            string generatedDataPath = System.IO.Path.Combine(UnityEngine.Application.dataPath.Replace("Assets", ""), "GeneratedData");
+            if (!System.IO.Directory.Exists(generatedDataPath))
+            {
+                System.IO.Directory.CreateDirectory(generatedDataPath);
+            }
+
+            string baseFilePath = System.IO.Path.Combine(generatedDataPath, baseFilename);
+
+            if (yieldPerChunk)
+            {
+                WriteRatFileWithSizeSplittingChunked(baseFilePath, compressed, maxFileSizeKB, processedFrames, null, onComplete);
+            }
+            else
+            {
+                var ratFiles = WriteRatFileWithSizeSplitting(baseFilePath, compressed, maxFileSizeKB, processedFrames);
+                onComplete?.Invoke(ratFiles);
+            }
         }
     }
 

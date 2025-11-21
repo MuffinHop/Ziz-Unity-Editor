@@ -115,11 +115,15 @@ public class SDFParticleRecorder : MonoBehaviour
     {
         public List<ParticleInstance> particles;
         public float timestamp;
+        public Vector3 cameraPosition;
+        public bool hasCamera;
 
         public ParticleFrameData(int capacity)
         {
             particles = new List<ParticleInstance>(capacity);
             timestamp = 0f;
+            cameraPosition = Vector3.zero;
+            hasCamera = false;
         }
     }
 
@@ -490,6 +494,19 @@ public class SDFParticleRecorder : MonoBehaviour
         ParticleFrameData frameData = new ParticleFrameData(maxParticles);
         frameData.timestamp = Time.time - _recordingStartTime;
         
+        // Capture camera position for billboarding
+        if (_mainCamera != null)
+        {
+            frameData.cameraPosition = _mainCamera.transform.position;
+            frameData.hasCamera = true;
+        }
+        else if (Camera.main != null)
+        {
+            _mainCamera = Camera.main;
+            frameData.cameraPosition = _mainCamera.transform.position;
+            frameData.hasCamera = true;
+        }
+        
         // Get spawn position for inactive particles
         Vector3 spawnPosition = GetSpawnPosition();
         
@@ -792,10 +809,17 @@ public class SDFParticleRecorder : MonoBehaviour
 
                     // 1. Create billboard matrix to face the camera (or default orientation)
                     Matrix4x4 billboardMatrix;
-                    if (_mainCamera != null)
+                    
+                    if (frame.hasCamera)
                     {
-                        // This matrix will orient an object at 'worldPos' to face the camera.
-                        // We extract only the rotation part to use it for orienting the quad vertices.
+                        // Use the camera position captured for this specific frame
+                        Vector3 viewDir = worldPos - frame.cameraPosition;
+                        if (viewDir.sqrMagnitude < 0.0001f) viewDir = Vector3.forward;
+                        billboardMatrix = Matrix4x4.TRS(Vector3.zero, Quaternion.LookRotation(viewDir, Vector3.up), Vector3.one);
+                    }
+                    else if (_mainCamera != null)
+                    {
+                        // Fallback to current camera if frame didn't capture one
                         Vector3 viewDir = worldPos - _mainCamera.transform.position;
                         if (viewDir.sqrMagnitude < 0.0001f) viewDir = Vector3.forward;
                         billboardMatrix = Matrix4x4.TRS(Vector3.zero, Quaternion.LookRotation(viewDir, Vector3.up), Vector3.one);
