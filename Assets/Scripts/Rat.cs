@@ -2114,7 +2114,8 @@ namespace Rat
             bool flipZ = true,
             bool skipValidation = false,
             bool yieldPerChunk = false,
-            System.Action<List<string>> onComplete = null)
+            System.Action<List<string>> onComplete = null,
+            List<UnityEngine.Matrix4x4> customMatrices = null)
         {
             if (vertexFrames == null || vertexFrames.Count == 0)
             {
@@ -2125,7 +2126,35 @@ namespace Rat
 
             // STEP 1: Apply transforms to vertices (if provided)
             List<UnityEngine.Vector3[]> processedFrames = vertexFrames;
-            if (customTransforms != null && customTransforms.Count == vertexFrames.Count)
+            bool appliedMatrixTransforms = false;
+
+            if (customMatrices != null)
+            {
+                if (customMatrices.Count == vertexFrames.Count)
+                {
+                    UnityEngine.Debug.Log($"ExportAnimationWithMaxBits: Baking {customMatrices.Count} matrix transforms into vertex animation...");
+                    processedFrames = new List<UnityEngine.Vector3[]>(vertexFrames.Count);
+
+                    for (int frameIndex = 0; frameIndex < vertexFrames.Count; frameIndex++)
+                    {
+                        var matrix = customMatrices[frameIndex];
+                        var transformedVertices = new UnityEngine.Vector3[vertexFrames[frameIndex].Length];
+                        for (int vertexIndex = 0; vertexIndex < vertexFrames[frameIndex].Length; vertexIndex++)
+                        {
+                            transformedVertices[vertexIndex] = matrix.MultiplyPoint3x4(vertexFrames[frameIndex][vertexIndex]);
+                        }
+                        processedFrames.Add(transformedVertices);
+                    }
+
+                    appliedMatrixTransforms = true;
+                }
+                else
+                {
+                    UnityEngine.Debug.LogWarning($"ExportAnimationWithMaxBits: customMatrices count ({customMatrices.Count}) does not match vertex frame count ({vertexFrames.Count}); ignoring matrices.");
+                }
+            }
+
+            if (!appliedMatrixTransforms && customTransforms != null && customTransforms.Count == vertexFrames.Count)
             {
                 UnityEngine.Debug.Log($"ExportAnimationWithMaxBits: Baking {customTransforms.Count} transform frames into vertex animation...");
                 processedFrames = new List<UnityEngine.Vector3[]>();
@@ -2151,6 +2180,10 @@ namespace Rat
                     
                     processedFrames.Add(transformedVertices);
                 }
+            }
+            else if (!appliedMatrixTransforms && customTransforms != null && customTransforms.Count != vertexFrames.Count)
+            {
+                UnityEngine.Debug.LogWarning($"ExportAnimationWithMaxBits: customTransforms count ({customTransforms.Count}) does not match vertex frame count ({vertexFrames.Count}); ignoring transform baking.");
             }
 
             // Handle Z-flipping

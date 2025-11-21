@@ -129,6 +129,8 @@ public class Actor : MonoBehaviour
     
     // Per-frame vertex capture
     private List<Vector3[]> capturedVertexFrames = new List<Vector3[]>();
+    private List<Rat.ActorTransformFloat> capturedTransformFrames = new List<Rat.ActorTransformFloat>();
+    private List<Matrix4x4> capturedWorldMatrices = new List<Matrix4x4>(); // diagnostic only
     private Mesh workingMesh;  // Cache for accessing vertex data
 
     // Getters
@@ -166,8 +168,9 @@ public class Actor : MonoBehaviour
         UpdateFilenamesFromTransform();
         lastTransformName = transform.name;
         
-        // Initialize working mesh cache
-        if (skinnedMeshRenderer != null && skinnedMeshRenderer.sharedMesh != null)
+        // Initialize working mesh cache for skinned meshes. Even if sharedMesh is not set yet
+        // we still create a working mesh to be safe (BakeMesh will write into this mesh).
+        if (skinnedMeshRenderer != null)
         {
             workingMesh = new Mesh();
         }
@@ -199,8 +202,10 @@ public class Actor : MonoBehaviour
     {
     // MatCap mode samples _MainTex when provided. Allow texture processing for MatCap.
         
+        // NOTE: matrix/transform detection intentionally moved into ExportCapturedFrames.
         try
         {
+            // NOTE: matrix/transform detection intentionally moved into ExportCapturedFrames.
             // First, try to extract texture from the actor's material directly
             Texture2D sourceTexture = null;
             
@@ -323,8 +328,9 @@ public class Actor : MonoBehaviour
     private void ValidateAndSetupComponents()
     {
         // Get mesh renderer components
-        meshRenderer = GetComponent<MeshRenderer>();
-        skinnedMeshRenderer = GetComponent<SkinnedMeshRenderer>();
+        // Prefer components on the same GameObject but allow renderers in children (include inactive)
+        meshRenderer = GetComponent<MeshRenderer>() ?? GetComponentInChildren<MeshRenderer>(true);
+        skinnedMeshRenderer = GetComponent<SkinnedMeshRenderer>() ?? GetComponentInChildren<SkinnedMeshRenderer>(true);
         
         // Search for animator in this GameObject and its parents
         animator = GetComponentInParent<Animator>();
@@ -332,6 +338,25 @@ public class Actor : MonoBehaviour
         // REQUIRE at least one renderer - this is non-negotiable
         if (meshRenderer == null && skinnedMeshRenderer == null)
         {
+            // Try a best-effort fallback for odd hierarchies (imported rigs, nested renderers, etc.)
+            var anyRenderer = GetComponentInChildren<Renderer>(true);
+            if (anyRenderer != null)
+            {
+                if (anyRenderer is SkinnedMeshRenderer anySmr)
+                {
+                    skinnedMeshRenderer = anySmr;
+                    Debug.LogWarning($"Actor {name} - detected a SkinnedMeshRenderer on a child; using it for recording and shader setup.");
+                }
+                else if (anyRenderer is MeshRenderer anyMr)
+                {
+                    meshRenderer = anyMr;
+                    Debug.LogWarning($"Actor {name} - detected a MeshRenderer on a child; using it for recording and shader setup.");
+                }
+                else
+                {
+                    Debug.LogWarning($"Actor {name} - found a Renderer of type {anyRenderer.GetType().Name} on a child; attempting to use it.");
+                }
+            }
             Debug.LogError($"Actor {name} requires a MeshRenderer or SkinnedMeshRenderer component.");
             
 #if UNITY_EDITOR
@@ -370,7 +395,20 @@ public class Actor : MonoBehaviour
     {
         // Get the renderer component
         Renderer renderer = meshRenderer != null ? (Renderer)meshRenderer : (Renderer)skinnedMeshRenderer;
-        
+
+        // As a fallback, try to find any renderer in children (include inactive) — some rigs place renderers deep in the hierarchy
+        if (renderer == null)
+        {
+            var anyRenderer = GetComponentInChildren<Renderer>(true);
+            if (anyRenderer != null)
+            {
+                renderer = anyRenderer;
+                if (anyRenderer is SkinnedMeshRenderer anySmr) skinnedMeshRenderer = anySmr;
+                else if (anyRenderer is MeshRenderer anyMr) meshRenderer = anyMr;
+                Debug.LogWarning($"Actor {name} - SetupShaderAndMaterial found child renderer: {anyRenderer.GetType().Name}; using it for material setup.");
+            }
+        }
+
         if (renderer == null)
         {
             Debug.LogError($"Actor {name} - no renderer found for shader setup.");
@@ -439,7 +477,53 @@ public class Actor : MonoBehaviour
         }
         
         // Apply the material to all materials on the renderer
-        renderer.material = material;
+        // For multi-submesh renderers we create clones of the base material for each slot
+        try
+        {
+            int slots = 1;
+            if (renderer is SkinnedMeshRenderer smr)
+            {
+                slots = Mathf.Max(1, smr.sharedMaterials?.Length ?? 1);
+            }
+            else if (renderer is MeshRenderer mr)
+            {
+                slots = Mathf.Max(1, mr.sharedMaterials?.Length ?? 1);
+            }
+
+            Material[] mats = new Material[slots];
+            for (int i = 0; i < slots; ++i)
+            {
+                // Create an instance per slot so artists can tweak them at runtime independently
+                Material instance = new Material(material);
+                instance.name = (slots == 1) ? material.name : $"{material.name}_slot{i}";
+                // If we have a texture to apply, set it on each instance
+                if (RequiresTexture(renderingMode))
+                {
+                    Texture2D tex = LoadTextureForActor();
+                    if (tex != null) instance.SetTexture("_MainTex", tex);
+                }
+                // Also set matcap if necessary
+                if (renderingMode == Rat.ActorRenderingMode.MatCap)
+                {
+                    Texture2D matcap = LoadMatcapTexture();
+                    if (matcap != null)
+                    {
+                        instance.SetTexture("_Matcap", matcap);
+                    }
+                }
+
+                mats[i] = instance;
+            }
+
+            // Assign the created material instances to the renderer
+            renderer.materials = mats;
+        }
+        catch (System.Exception e)
+        {
+            // Fallback: assign single material
+            Debug.LogWarning($"Actor {name} - failed to apply multi-material instances, falling back to single material: {e.Message}");
+            renderer.material = material;
+        }
         
     Debug.Log($"Actor {name} - shader '{shaderName}' set for rendering mode {renderingMode}");
     }
@@ -675,32 +759,34 @@ public class Actor : MonoBehaviour
             StartVertexRecording();
         }
         
-        if (isRecording)
-        {
-            bool shouldCapture = false;
-            float rate = GetTargetRecordingFramerate();
-            
-            if (rate > 0)
-            {
-                // Time-based capture
-                if (Time.time - lastCaptureTime >= (1f / rate))
-                {
-                    shouldCapture = true;
-                    lastCaptureTime = Time.time;
-                }
-            }
-            else
-            {
-                // Frame-based capture (every frame, subject to frameCaptureInterval in CaptureCurrentFrame)
-                shouldCapture = true;
-            }
+    }
 
-            if (shouldCapture)
+    private void LateUpdate()
+    {
+        if (!isRecording)
+            return;
+
+        bool shouldCapture = false;
+        float rate = GetTargetRecordingFramerate();
+
+        if (rate > 0)
+        {
+            // Time-based capture
+            if (Time.time - lastCaptureTime >= (1f / rate))
             {
-                CaptureCurrentFrame();
+                shouldCapture = true;
+                lastCaptureTime = Time.time;
             }
-            
-            recordedFrameCount++;
+        }
+        else
+        {
+            // Frame-based capture (every frame, subject to frameCaptureInterval in CaptureCurrentFrame)
+            shouldCapture = true;
+        }
+
+        if (shouldCapture)
+        {
+            CaptureCurrentFrame();
         }
     }
     
@@ -919,6 +1005,8 @@ public class Actor : MonoBehaviour
         
         // Clear any previous capture data
         capturedVertexFrames.Clear();
+        capturedTransformFrames.Clear();
+        capturedWorldMatrices.Clear();
         
         isRecording = true;
         recordingStartTime = Time.time;
@@ -929,8 +1017,9 @@ public class Actor : MonoBehaviour
         lastCaptureTime = Time.time - interval;
         
         recordedFrameCount = 0;
+        frameSkipCounter = 0;
         
-        Debug.Log($"Actor {name} - started vertex recording (capturing world coordinates every frame)");
+        Debug.Log($"Actor {name} - started vertex recording (local vertices + per-frame world transforms)");
     }
     
     /// <summary>
@@ -950,7 +1039,7 @@ public class Actor : MonoBehaviour
             frameSkipCounter = 0;
         }
         
-        Vector3[] worldVertices = null;
+        Vector3[] frameVertices = null;
         
         if (skinnedMeshRenderer != null)
         {
@@ -959,13 +1048,8 @@ public class Actor : MonoBehaviour
             
             // Get vertices in local space
             Vector3[] localVertices = workingMesh.vertices;
-            worldVertices = new Vector3[localVertices.Length];
-            
-            // Transform to world space
-            for (int i = 0; i < localVertices.Length; i++)
-            {
-                worldVertices[i] = transform.TransformPoint(localVertices[i]);
-            }
+            frameVertices = new Vector3[localVertices.Length];
+            Array.Copy(localVertices, frameVertices, localVertices.Length);
         }
         else if (meshRenderer != null)
         {
@@ -973,19 +1057,25 @@ public class Actor : MonoBehaviour
             if (meshFilter != null && meshFilter.sharedMesh != null)
             {
                 Vector3[] localVertices = meshFilter.sharedMesh.vertices;
-                worldVertices = new Vector3[localVertices.Length];
-                
-                // Transform to world space
-                for (int i = 0; i < localVertices.Length; i++)
-                {
-                    worldVertices[i] = transform.TransformPoint(localVertices[i]);
-                }
+                frameVertices = new Vector3[localVertices.Length];
+                Array.Copy(localVertices, frameVertices, localVertices.Length);
             }
         }
         
-        if (worldVertices != null)
+        if (frameVertices != null)
         {
-            capturedVertexFrames.Add(worldVertices);
+            uint localFrameIndex = (uint)capturedVertexFrames.Count;
+            capturedVertexFrames.Add(frameVertices);
+            capturedTransformFrames.Add(new Rat.ActorTransformFloat
+            {
+                position = transform.position,
+                rotation = transform.eulerAngles,
+                scale = transform.lossyScale,
+                rat_file_index = 0,
+                rat_local_frame = localFrameIndex
+            });
+            capturedWorldMatrices.Add(transform.localToWorldMatrix);
+            recordedFrameCount++;
         }
     }
     
@@ -1031,7 +1121,7 @@ public class Actor : MonoBehaviour
         }
         
         Debug.Log($"Actor {name} - recorded {recordedFrameCount} updates over {recordingDuration:F2}s");
-        Debug.Log($"Actor {name} - captured {capturedVertexFrames.Count} vertex frames");
+        Debug.Log($"Actor {name} - captured {capturedVertexFrames.Count} vertex frames with {capturedTransformFrames.Count} transform snapshots");
         
         // Export to RAT and ACT files with calculated framerate
         ExportCapturedFrames(exportFramerate);
@@ -1075,17 +1165,83 @@ public class Actor : MonoBehaviour
         // Extract UVs and colors from source mesh
         uvs = sourceMesh.uv.Length > 0 ? sourceMesh.uv : new Vector2[sourceMesh.vertexCount];
         colors = sourceMesh.colors.Length > 0 ? sourceMesh.colors : Enumerable.Repeat(Color.white, sourceMesh.vertexCount).ToArray();
+
+        if (capturedTransformFrames.Count == 0)
+        {
+            Debug.LogError($"Actor {name} - no transform frames captured; cannot bake world transforms.");
+            return;
+        }
+
+        List<Vector3[]> framesToExport = capturedVertexFrames;
+        List<Rat.ActorTransformFloat> transformsToExport = capturedTransformFrames;
+
+        if (framesToExport.Count != transformsToExport.Count)
+        {
+            int alignedCount = Mathf.Min(framesToExport.Count, transformsToExport.Count);
+            Debug.LogWarning($"Actor {name} - frame/transform count mismatch ({framesToExport.Count} vs {transformsToExport.Count}); truncating to {alignedCount} frames.");
+            framesToExport = framesToExport.Take(alignedCount).ToList();
+            transformsToExport = transformsToExport.Take(alignedCount).ToList();
+            if (capturedWorldMatrices.Count > alignedCount)
+                capturedWorldMatrices = capturedWorldMatrices.Take(alignedCount).ToList();
+        }
+
+        // Diagnostic: compare TRS-built matrix vs captured localToWorldMatrix for scale/rotation mismatch
+        bool useMatricesForBaking = false;
+        #if UNITY_EDITOR
+        if (capturedWorldMatrices != null && capturedWorldMatrices.Count == transformsToExport.Count)
+        {
+            for (int i = 0; i < transformsToExport.Count; i++)
+            {
+                var t = transformsToExport[i];
+                Matrix4x4 trs = Matrix4x4.TRS(t.position, Quaternion.Euler(t.rotation), t.scale);
+                Matrix4x4 captured = capturedWorldMatrices[i];
+                // Compare scales roughly by extracting basis lengths
+                Vector3 s_trs = new Vector3(trs.GetColumn(0).magnitude, trs.GetColumn(1).magnitude, trs.GetColumn(2).magnitude);
+                Vector3 s_cap = new Vector3(captured.GetColumn(0).magnitude, captured.GetColumn(1).magnitude, captured.GetColumn(2).magnitude);
+                if (!Mathf.Approximately(s_trs.x, s_cap.x) || !Mathf.Approximately(s_trs.y, s_cap.y) || !Mathf.Approximately(s_trs.z, s_cap.z))
+                {
+                    useMatricesForBaking = true;
+                    Debug.LogWarning($"Actor {name} - TRS vs matrix scale mismatch at frame {i}: TRS={s_trs} captured={s_cap}. Will use matrix baking for accurate export.");
+                    break;
+                }
+            }
+        }
+        #endif
         
         // Adjust framerate based on frame skip interval
         float adjustedFramerate = framerate / frameCaptureInterval;
         
-        Debug.Log($"Actor {name} - starting export of {capturedVertexFrames.Count} frames at {adjustedFramerate:F1} FPS (capture interval: {frameCaptureInterval})...");
+        Debug.Log($"Actor {name} - starting export of {framesToExport.Count} frames at {adjustedFramerate:F1} FPS (capture interval: {frameCaptureInterval})...");
         
         try
         {
-            Rat.Tool.ExportAnimationWithMaxBits(
+            if (useMatricesForBaking)
+            {
+                // Use matrix baking for exact world transforms (handles complex parent non-uniform scales)
+                Rat.Tool.ExportAnimationWithMaxBits(
+                    baseFilename,
+                    framesToExport,
+                    sourceMesh,
+                    uvs,
+                    colors,
+                    adjustedFramerate,
+                    textureFilename,
+                    maxChunkSizeKB,
+                    renderingMode,
+                    maxBitsPerAxis,
+                    transformsToExport,
+                    flipZ: true,
+                    skipValidation: false,
+                    yieldPerChunk: false,
+                    onComplete: null,
+                    customMatrices: capturedWorldMatrices
+                );
+            }
+            else
+            {
+                Rat.Tool.ExportAnimationWithMaxBits(
                 baseFilename,
-                capturedVertexFrames,
+                framesToExport,
                 sourceMesh,
                 uvs,
                 colors,
@@ -1094,12 +1250,13 @@ public class Actor : MonoBehaviour
                 maxChunkSizeKB,  // Use configured chunk size instead of hardcoded 64
                 renderingMode,
                 maxBitsPerAxis,  // Apply the configured bit width limit
-                customTransforms: null,
-                flipZ: true, // Enable Z-flipping for OpenGL compatibility
-                skipValidation: false,
-                yieldPerChunk: false,
-                onComplete: null
+                    transformsToExport,
+                    flipZ: true, // Enable Z-flipping for OpenGL compatibility
+                    skipValidation: false,
+                    yieldPerChunk: false,
+                    onComplete: null
             );
+            }
             
             // Manually determine created RAT files after export completes
             string generatedDataPath = Path.Combine(Application.dataPath.Replace("Assets", ""), "GeneratedData");
@@ -1139,6 +1296,7 @@ public class Actor : MonoBehaviour
             AnimationData.meshColors = colors;
             AnimationData.meshIndices = sourceMesh.triangles;
             AnimationData.textureFilename = textureFilename;
+            capturedWorldMatrices.Clear();
             
             // Now save the ACT file with the updated AnimationData
             SaveBothFiles();
